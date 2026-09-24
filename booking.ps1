@@ -251,6 +251,11 @@ function Wait-BookingWindow([int]$TimeoutSeconds, [int]$ProgressSeconds = 0) {
     return $null
 }
 
+function Test-WorkbenchSelected($Wecom) {
+    $pixel = Get-WindowPixel $Wecom 0.01 0.52
+    return ($pixel.R -lt 210 -and $pixel.G -lt 225 -and $pixel.B -gt 230)
+}
+
 function Open-Booking {
     $browser = Find-BookingWindow
     if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
@@ -259,15 +264,17 @@ function Open-Booking {
     Focus-Maximize $wecom
     Log '已放大企业微信，开始打开工作台'
     try {
-        if ($null -eq (Find-Text $wecom '企业微信-工作台' -Exact)) {
+        if (-not (Test-WorkbenchSelected $wecom)) {
             if (-not (Click-Text $wecom '工作台' -Exact)) {
                 Log '未读到工作台按钮，按最大化窗口的左侧位置点击'
                 Click-WindowRatio $wecom 0.016 0.529
             }
-            if ($null -eq (Wait-Text $wecom '企业微信-工作台' 5 -Exact)) {
+            Start-Sleep -Milliseconds 500
+            if (-not (Test-WorkbenchSelected $wecom)) {
                 Log '尚未进入工作台，再尝试点击一次'
                 Click-WindowRatio $wecom 0.016 0.529
-                if ($null -eq (Wait-Text $wecom '企业微信-工作台' 5 -Exact)) {
+                Start-Sleep -Milliseconds 500
+                if (-not (Test-WorkbenchSelected $wecom)) {
                     throw '点击后仍未进入工作台'
                 }
             }
