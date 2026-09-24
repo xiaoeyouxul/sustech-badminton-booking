@@ -336,27 +336,44 @@ function Accept-Notice($Browser) {
 }
 
 function Open-Venue($Browser) {
-    Log '寻找润杨羽毛球馆'
+    Log '打开场馆列表中的润杨羽毛球馆'
+    Focus-Maximize $Browser
     Scroll-To-Top $Browser
-    for ($i = 0; $i -lt 16; $i++) {
-        $venue = Find-Venue $Browser
-        if ($null -ne $venue -and (Click-Element $venue)) {
-            Start-Sleep -Milliseconds 350
-            return
+    $before = Get-WindowPixel $Browser 0.05 0.25
+    # The fifth venue card is partly visible above the bottom navigation on the maximized page.
+    foreach ($attempt in 1..2) {
+        if ($attempt -eq 2) {
+            Log '场馆页面未变化，向下滚动后重试一次'
+            Scroll-In $Browser 2
+            Start-Sleep -Milliseconds 250
+            $before = Get-WindowPixel $Browser 0.05 0.25
         }
-        Scroll-In $Browser 2
+        $y = if ($attempt -eq 1) { 0.925 } else { 0.82 }
+        Click-WindowRatio $Browser 0.16 $y
+        $until = (Get-Date).AddSeconds(2)
+        do {
+            Start-Sleep -Milliseconds 250
+            $after = Get-WindowPixel $Browser 0.05 0.25
+            $change = [Math]::Abs($after.R - $before.R) +
+                [Math]::Abs($after.G - $before.G) +
+                [Math]::Abs($after.B - $before.B)
+            if ($change -gt 75) {
+                Log '球场列表已打开'
+                return
+            }
+        } while ((Get-Date) -lt $until)
     }
-    throw '未找到润杨羽毛球馆'
+    throw '点击润杨羽毛球馆后页面未变化；已停止，请检查浏览器缩放和场馆列表位置'
 }
 
 function Open-Court($Browser, [int]$Court) {
     $label = "${Court}号场"
     Scroll-To-Top $Browser
     for ($i = 0; $i -lt 12; $i++) {
-        $hit = Find-Text $Browser $label
+        $hit = Find-Text $Browser $label -Exact
         if ($null -ne $hit -and (Click-Element $hit)) {
             Start-Sleep -Milliseconds 300
-            if ($null -ne (Wait-Text $Browser '预约时间' 5)) { return $true }
+            if ($null -ne (Wait-Text $Browser '后天' 5 -Exact)) { return $true }
         }
         Scroll-In $Browser 2
     }
@@ -522,9 +539,6 @@ try {
     $browser = Open-Booking
     Log '已检测到预约弹窗并放大'
     Accept-Notice $browser
-    if ($null -eq (Find-Venue $browser)) {
-        if (-not (Click-Text $browser '场地预约' -Exact)) { throw '未找到场地预约首页' }
-    }
     Open-Venue $browser
     $release = [datetime]::ParseExact([string]$config.release_time, 'HH:mm:ss', $null)
     if ($config.wait_for_release) {
