@@ -424,9 +424,15 @@ function Open-Court($Browser, [int]$Court) {
 }
 
 function Test-DaySelected($Browser, [double]$XRatio) {
-    $line = Get-WindowPixel $Browser $XRatio 0.388
-    return ($line.R -lt 100 -and $line.G -gt 140 -and $line.G -lt 220 -and
-        $line.B -gt 130 -and $line.B -lt 220)
+    foreach ($dx in @(-0.01, 0, 0.01)) {
+        for ($step = 0; $step -le 45; $step++) {
+            $y = 0.36 + $step * 0.001
+            $pixel = Get-WindowPixel $Browser ($XRatio + $dx) $y
+            if ($pixel.R -lt 100 -and $pixel.G -gt 140 -and $pixel.G -lt 220 -and
+                $pixel.B -gt 130 -and $pixel.B -lt 220) { return $true }
+        }
+    }
+    return $false
 }
 
 function Select-Day($Browser, [datetime]$Day, [timespan]$ReleaseTime) {
@@ -460,18 +466,51 @@ function Slot-Labels([string]$Start, [string]$End) {
     return $result
 }
 
+function Slot-Position([string]$Label) {
+    $start = [datetime]::ParseExact(($Label -split '-')[0], 'H:mm', $null)
+    $index = [int](($start.Hour - 8) * 2 + $start.Minute / 30)
+    if ($index -lt 0 -or $index -gt 29) { throw "时段不在页面显示的 08:00–23:00 范围：$Label" }
+    $xPositions = @(0.058, 0.160, 0.262, 0.353, 0.455, 0.557, 0.649, 0.751, 0.853, 0.945)
+    $yPositions = @(0.432, 0.493, 0.556)
+    return [pscustomobject]@{ X = $xPositions[$index % 10]; Y = $yPositions[[int][Math]::Floor($index / 10)] }
+}
+
+function Test-SlotSelected($Browser, $Position) {
+    $pixel = Get-WindowPixel $Browser $Position.X ($Position.Y - 0.013)
+    return ($pixel.R -lt 100 -and $pixel.G -gt 140 -and $pixel.G -lt 220 -and
+        $pixel.B -gt 130 -and $pixel.B -lt 220)
+}
+
+function Test-SlotAvailable($Browser, $Position) {
+    for ($dx = -0.025; $dx -le 0.025; $dx += 0.004) {
+        for ($dy = -0.008; $dy -le 0.008; $dy += 0.004) {
+            $pixel = Get-WindowPixel $Browser ($Position.X + $dx) ($Position.Y + $dy)
+            if ($pixel.R -lt 100 -and $pixel.G -gt 130 -and $pixel.G -lt 230 -and
+                $pixel.B -gt 120 -and $pixel.B -lt 230) { return $true }
+        }
+    }
+    return $false
+}
+
 function Select-Slots($Browser, $Range) {
     $labels = @(Slot-Labels $Range.start $Range.end)
     foreach ($label in $labels) {
-        $slot = Find-Text $Browser $label -Exact
-        if ($null -eq $slot) { Log "时段不可用：$label"; return $false }
-        try { if (-not $slot.Current.IsEnabled -or $slot.Current.Name -match '已满') { return $false } } catch { return $false }
-        if (-not (Click-Element $slot)) { return $false }
+        $position = Slot-Position $label
+        if (Test-SlotSelected $Browser $position) { continue }
+        if (-not (Test-SlotAvailable $Browser $position)) { Log "时段不可用：$label"; return $false }
+        Click-WindowRatio $Browser $position.X $position.Y
         Start-Sleep -Milliseconds 180
+        if (-not (Test-SlotSelected $Browser $position)) { throw "点击 $label 后未确认选中，已停止" }
     }
-    $minutes = Read-BookingMinutes $Browser
-    if ($null -eq $minutes) { throw '无法核对页面显示的预约时长，未提交' }
-    if ($minutes -ne $labels.Count * 30) { Log '页面显示的预约时长与目标不一致'; return $false }
+    $selected = 0
+    foreach ($hour in 8..22) {
+        foreach ($minute in @('00', '30')) {
+            $position = Slot-Position ('{0}:{1}-{0}:{1}' -f $hour, $minute)
+            if (Test-SlotSelected $Browser $position) { $selected++ }
+        }
+    }
+    if ($selected -ne $labels.Count) { throw "页面选中的半小时格数为 $selected，目标为 $($labels.Count)；已停止" }
+    Log ("已确认选中 {0} 个半小时格" -f $selected)
     return $true
 }
 
@@ -517,8 +556,9 @@ function Fill-Near($Browser, [string]$Label, [string]$Value) {
 }
 
 function Try-Return($Browser) {
-    if (Click-Text $Browser '返回' -Exact) { Start-Sleep -Milliseconds 300; return $true }
-    return $false
+    Click-WindowRatio $Browser 0.028 0.095
+    Start-Sleep -Milliseconds 350
+    return $true
 }
 
 function Reset-To-Courts($Browser) {
