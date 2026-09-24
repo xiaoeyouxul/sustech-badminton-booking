@@ -15,6 +15,7 @@ public static class NativeUi {
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
@@ -184,8 +185,12 @@ function Focus-Maximize($Window) {
     $h = [IntPtr]$Window.Current.NativeWindowHandle
     if ($h -eq [IntPtr]::Zero) { throw '找到了预约页，但无法取得窗口句柄' }
     [void][NativeUi]::ShowWindow($h, 3)
-    [void][NativeUi]::SetForegroundWindow($h)
-    Start-Sleep -Milliseconds 350
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        [void][NativeUi]::SetForegroundWindow($h)
+        Start-Sleep -Milliseconds 250
+        if ([NativeUi]::GetForegroundWindow() -eq $h) { break }
+    }
+    if ([NativeUi]::GetForegroundWindow() -ne $h) { throw '无法将目标窗口置于前台，请先关闭遮挡窗口再重试' }
     $rect = New-Object NativeUi+NativeRect
     $workArea = [System.Windows.Forms.Screen]::FromHandle($h).WorkingArea
     if (-not [NativeUi]::GetWindowRect($h, [ref]$rect) -or
@@ -252,8 +257,10 @@ function Wait-BookingWindow([int]$TimeoutSeconds, [int]$ProgressSeconds = 0) {
 }
 
 function Test-WorkbenchSelected($Wecom) {
-    $pixel = Get-WindowPixel $Wecom 0.01 0.52
-    return ($pixel.R -lt 210 -and $pixel.G -lt 225 -and $pixel.B -gt 230)
+    $sidebar = Get-WindowPixel $Wecom 0.01 0.52
+    $tab = Get-WindowPixel $Wecom 0.10 0.034
+    return (($sidebar.R -lt 210 -and $sidebar.G -lt 225 -and $sidebar.B -gt 230) -or
+        ($tab.R -gt 240 -and $tab.G -gt 240 -and $tab.B -gt 240))
 }
 
 function Open-Booking {
@@ -272,6 +279,7 @@ function Open-Booking {
             Start-Sleep -Milliseconds 500
             if (-not (Test-WorkbenchSelected $wecom)) {
                 Log '尚未进入工作台，再尝试点击一次'
+                Focus-Maximize $wecom
                 Click-WindowRatio $wecom 0.016 0.529
                 Start-Sleep -Milliseconds 500
                 if (-not (Test-WorkbenchSelected $wecom)) {
