@@ -1,0 +1,6 @@
+config.json
+booking.log
+*.test.json
+*.zip
+vendor/
+__pycache__/
