@@ -421,6 +421,7 @@ function Open-Court($Browser, [int]$Court) {
                 [Math]::Abs($after.G - $before.G) +
                 [Math]::Abs($after.B - $before.B)
             if ($change -gt 75) {
+                Start-Sleep -Milliseconds 750
                 Log ("{0} 号场页面已打开" -f $Court)
                 return $true
             }
@@ -450,13 +451,24 @@ function Select-Day($Browser, [datetime]$Day, [timespan]$ReleaseTime) {
     if ($offset -ge $tabCount) { throw "目标日期 $($Day.ToString('yyyy-MM-dd')) 尚未开放，请在当天开放时间后运行" }
     $x = if ($tabCount -eq 3) { @(0.125, 0.375, 0.625)[$offset] } else { @(0.166, 0.5)[$offset] }
     Log ("选择 {0}（{1}，当前按 {2} 个日期选项定位）" -f $label, $Day.ToString('yyyy-MM-dd'), $tabCount)
-    if (Test-DaySelected $Browser $x) { return }
+    $until = (Get-Date).AddSeconds(6)
+    do {
+        if (Test-DaySelected $Browser $x) { return }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $until)
     Click-WindowRatio $Browser $x 0.367
-    $until = (Get-Date).AddSeconds(2)
+    $until = (Get-Date).AddSeconds(3)
     do {
         Start-Sleep -Milliseconds 150
         if (Test-DaySelected $Browser $x) { return }
     } while ((Get-Date) -lt $until)
+    $handle = [IntPtr]$Browser.Current.NativeWindowHandle
+    $rect = New-Object NativeUi+NativeRect
+    if ([NativeUi]::GetWindowRect($handle, [ref]$rect)) {
+        $pixel = Get-WindowPixel $Browser $x 0.388
+        Log ("日期校验采样：窗口 {0}x{1}，选中线位置 RGB({2},{3},{4})" -f
+            ($rect.Right - $rect.Left), ($rect.Bottom - $rect.Top), $pixel.R, $pixel.G, $pixel.B)
+    }
     throw "点击 $label 后未确认选中；请检查日期栏是否已刷新"
 }
 
