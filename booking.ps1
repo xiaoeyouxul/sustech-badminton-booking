@@ -11,9 +11,11 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class NativeUi {
+    public struct NativeRect { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
 }
@@ -79,6 +81,23 @@ function Click-Text($Root, [string]$Text, [switch]$Exact) {
     $e = Find-Text $Root $Text -Exact:$Exact
     if ($null -eq $e) { return $false }
     return Click-Element $e
+}
+
+function Click-WindowRatio($Window, [double]$XRatio, [double]$YRatio) {
+    $handle = [IntPtr]$Window.Current.NativeWindowHandle
+    $rect = New-Object NativeUi+NativeRect
+    if ($handle -eq [IntPtr]::Zero -or -not [NativeUi]::GetWindowRect($handle, [ref]$rect)) {
+        throw '无法取得企业微信窗口位置'
+    }
+    $width = $rect.Right - $rect.Left
+    $height = $rect.Bottom - $rect.Top
+    if ($width -lt 800 -or $height -lt 600) { throw '企业微信窗口未正确最大化' }
+    $x = [int]($rect.Left + $width * $XRatio)
+    $y = [int]($rect.Top + $height * $YRatio)
+    [void][NativeUi]::SetCursorPos($x, $y)
+    Start-Sleep -Milliseconds 80
+    [NativeUi]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+    [NativeUi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
 }
 
 function Top-Windows {
@@ -155,20 +174,32 @@ function Open-Booking {
     $wecom = Find-WeCom
     if ($null -eq $wecom) { throw '未找到企业微信。请先登录并打开电脑版企业微信。' }
     Focus-Maximize $wecom
-    $opened = $false
-    if (Click-Text $wecom '工作台' -Exact) {
-        if ($null -ne (Wait-Text $wecom '校园场馆/会议预约系统' 8)) {
-            if (Click-Text $wecom '校园场馆/会议预约系统') {
-                if ($null -ne (Wait-Text $wecom '场地预约' 8 -Exact)) {
-                    $opened = Click-Text $wecom '场地预约' -Exact
-                }
-            }
+    try {
+        if (-not (Click-Text $wecom '工作台' -Exact)) {
+            Log '未读到工作台控件，按电脑版截图中的左侧位置点击'
+            Click-WindowRatio $wecom 0.016 0.529
         }
+        Start-Sleep -Milliseconds 650
+        $appCard = Wait-Text $wecom '校园场馆/会议预约系统' 2
+        if ($null -eq $appCard -or -not (Click-Element $appCard)) {
+            Click-WindowRatio $wecom 0.938 0.294
+        }
+        Start-Sleep -Milliseconds 850
+        $bookingTab = Wait-Text $wecom '场地预约' 2 -Exact
+        if ($null -eq $bookingTab -or -not (Click-Element $bookingTab)) {
+            Click-WindowRatio $wecom 0.267 0.982
+        }
+    } catch {
+        Log ('企业微信自动导航未完成：' + $_.Exception.Message)
     }
-    if (-not $opened) {
-        Log '电脑版企业微信未提供可识别的导航按钮。请手动依次打开工作台、校园场馆/会议预约系统、场地预约；程序正在等待预约弹窗（最多 120 秒）。'
-    }
-    $until = (Get-Date).AddSeconds($(if ($opened) { 20 } else { 120 }))
+    $until = (Get-Date).AddSeconds(20)
+    do {
+        $browser = Find-BookingWindow
+        if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
+        Start-Sleep -Milliseconds 400
+    } while ((Get-Date) -lt $until)
+    Log '尚未检测到独立预约弹窗。请手动打开「工作台 → 校园场馆/会议预约系统 → 场地预约」；程序继续等待 120 秒。'
+    $until = (Get-Date).AddSeconds(120)
     do {
         $browser = Find-BookingWindow
         if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
