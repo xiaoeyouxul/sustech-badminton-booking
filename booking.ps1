@@ -5,10 +5,6 @@
 )
 
 $ErrorActionPreference = 'Stop'
-$bookingProcess = Get-Process -Id $PID
-@{ process_id = $PID; start_ticks = $bookingProcess.StartTime.ToUniversalTime().Ticks } |
-    ConvertTo-Json -Compress |
-    Set-Content -LiteralPath (Join-Path $PSScriptRoot 'booking.pid.json') -Encoding ASCII
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @'
@@ -22,6 +18,9 @@ public static class NativeUi {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    [DllImport("gdi32.dll")] public static extern uint GetPixel(IntPtr hDC, int x, int y);
 }
 '@
 [void][NativeUi]::SetProcessDPIAware()
@@ -97,21 +96,61 @@ function Click-Text($Root, [string]$Text, [switch]$Exact) {
     return Click-Element $e
 }
 
+function Register-BookingProcess {
+    $pidFile = Join-Path $PSScriptRoot 'booking.pid.json'
+    if (Test-Path -LiteralPath $pidFile) {
+        $saved = $null
+        try { $saved = Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json } catch { }
+        if ($null -ne $saved) {
+            $existing = Get-Process -Id ([int]$saved.process_id) -ErrorAction SilentlyContinue
+            if ($null -ne $existing -and
+                $existing.ProcessName -in @('powershell', 'pwsh') -and
+                $existing.StartTime.ToUniversalTime().Ticks -eq [long]$saved.start_ticks) {
+                throw '已有预约脚本正在运行。请先双击 stop-booking.cmd 停止它。'
+            }
+        }
+    }
+    $bookingProcess = Get-Process -Id $PID
+    @{ process_id = $PID; start_ticks = $bookingProcess.StartTime.ToUniversalTime().Ticks } |
+        ConvertTo-Json -Compress |
+        Set-Content -LiteralPath $pidFile -Encoding ASCII
+}
+
 function Click-WindowRatio($Window, [double]$XRatio, [double]$YRatio) {
     $handle = [IntPtr]$Window.Current.NativeWindowHandle
     $rect = New-Object NativeUi+NativeRect
     if ($handle -eq [IntPtr]::Zero -or -not [NativeUi]::GetWindowRect($handle, [ref]$rect)) {
-        throw '无法取得企业微信窗口位置'
+        throw '无法取得窗口位置'
     }
     $width = $rect.Right - $rect.Left
     $height = $rect.Bottom - $rect.Top
-    if ($width -lt 800 -or $height -lt 600) { throw '企业微信窗口未正确最大化' }
+    if ($width -lt 800 -or $height -lt 600) { throw '窗口未正确最大化' }
     $x = [int]($rect.Left + $width * $XRatio)
     $y = [int]($rect.Top + $height * $YRatio)
     [void][NativeUi]::SetCursorPos($x, $y)
     Start-Sleep -Milliseconds 80
     [NativeUi]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [NativeUi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+}
+
+function Get-WindowPixel($Window, [double]$XRatio, [double]$YRatio) {
+    $handle = [IntPtr]$Window.Current.NativeWindowHandle
+    $rect = New-Object NativeUi+NativeRect
+    if ($handle -eq [IntPtr]::Zero -or -not [NativeUi]::GetWindowRect($handle, [ref]$rect)) {
+        throw '无法读取预约窗口位置'
+    }
+    $x = [int]($rect.Left + ($rect.Right - $rect.Left) * $XRatio)
+    $y = [int]($rect.Top + ($rect.Bottom - $rect.Top) * $YRatio)
+    $dc = [NativeUi]::GetDC([IntPtr]::Zero)
+    if ($dc -eq [IntPtr]::Zero) { throw '无法读取屏幕颜色' }
+    try { $color = [NativeUi]::GetPixel($dc, $x, $y) }
+    finally { [void][NativeUi]::ReleaseDC([IntPtr]::Zero, $dc) }
+    if ($color -eq [uint32]::MaxValue) { throw '无法读取预约窗口像素' }
+    return [pscustomobject]@{
+        R = [int]($color -band 0xFF)
+        G = [int](($color -shr 8) -band 0xFF)
+        B = [int](($color -shr 16) -band 0xFF)
+    }
 }
 
 function Top-Windows {
@@ -252,67 +291,45 @@ function Find-Venue($Browser) {
     return $null
 }
 
-function Find-NoticeDialog($Browser) {
-    $title = Find-Text $Browser '场地预约须知' -Exact
-    if ($null -eq $title) { return $null }
-    $browserRect = $Browser.Current.BoundingRectangle
-    $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
-    $e = $title
-    for ($depth = 0; $depth -lt 10; $depth++) {
-        try {
-            $e = $walker.GetParent($e)
-            if ($null -eq $e) { break }
-            $r = $e.Current.BoundingRectangle
-            if ($r.Width -ge 250 -and $r.Height -ge 250 -and
-                $r.Width -lt $browserRect.Width * 0.8 -and
-                $r.Height -lt $browserRect.Height * 0.95) { return $e }
-        } catch { break }
-    }
-    return $null
-}
-
-function Find-NoticeAgreeButton($Dialog) {
-    foreach ($e in (Elements $Dialog)) {
-        try {
-            if ((Rect-OK $e) -and
-                $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
-                $e.Current.Name -eq '同意本条款' -and
-                $e.Current.IsEnabled) { return $e }
-        } catch { }
-    }
-    return $null
-}
-
-function Scroll-Notice($Dialog) {
-    $r = $Dialog.Current.BoundingRectangle
-    $x = [int]($r.Left + $r.Width * 0.5)
-    $y = [int]($r.Top + $r.Height * 0.55)
+function Scroll-Notice($Browser) {
+    $handle = [IntPtr]$Browser.Current.NativeWindowHandle
+    $r = New-Object NativeUi+NativeRect
+    if (-not [NativeUi]::GetWindowRect($handle, [ref]$r)) { throw '无法读取预约窗口位置' }
+    $x = [int]($r.Left + ($r.Right - $r.Left) * 0.5)
+    $y = [int]($r.Top + ($r.Bottom - $r.Top) * 0.55)
     [void][NativeUi]::SetCursorPos($x, $y)
-    Start-Sleep -Milliseconds 100
-    for ($step = 0; $step -lt 4; $step++) {
+    Start-Sleep -Milliseconds 80
+    for ($step = 0; $step -lt 8; $step++) {
         [NativeUi]::mouse_event(0x0800, 0, 0, -120, [UIntPtr]::Zero)
-        Start-Sleep -Milliseconds 100
+        Start-Sleep -Milliseconds 55
     }
 }
 
 function Accept-Notice($Browser) {
     Focus-Maximize $Browser
-    Log '检查场地预约须知'
-    if ($null -eq (Find-Text $Browser '场地预约须知' -Exact)) { return }
-    for ($i = 0; $i -lt 24; $i++) {
-        $dialog = Find-NoticeDialog $Browser
-        if ($null -eq $dialog) { throw '无法识别场地预约须知弹窗，请手动检查页面' }
-        $agree = Find-NoticeAgreeButton $dialog
-        if ($null -ne $agree -and (Click-Element $agree)) {
-            if ($null -eq (Wait-Text $Browser '场地预约须知' 2 -Exact)) {
-                Log '已同意场地预约须知'
+    Log '检查场地预约须知（依据你提供的最大化窗口截图）'
+    $outside = Get-WindowPixel $Browser 0.75 0.45
+    $outsideBrightness = ($outside.R + $outside.G + $outside.B) / 3
+    if ($outsideBrightness -gt 170) { Log '须知弹窗已关闭'; return }
+    for ($i = 0; $i -le 4; $i++) {
+        $button = Get-WindowPixel $Browser 0.46 0.784
+        if ($button.R -lt 70 -and $button.G -gt 140 -and $button.G -lt 230 -and $button.B -lt 150) {
+            Log '已滚动到底部，点击「同意本条款」'
+            Click-WindowRatio $Browser 0.50 0.795
+            Start-Sleep -Milliseconds 900
+            $after = Get-WindowPixel $Browser 0.75 0.45
+            if ((($after.R + $after.G + $after.B) / 3) -gt 170) {
+                Log '须知弹窗已关闭'
                 return
             }
+            throw '已点击同意本条款，但弹窗仍在；已停止避免重复点击'
         }
-        if ($i % 4 -eq 0) { Log '鼠标置于须知内容区，向下滚动阅读' }
-        Scroll-Notice $dialog
+        if ($i -eq 4) { break }
+        Log ("在须知内容区向下滚动（第 {0} 次）" -f ($i + 1))
+        Scroll-Notice $Browser
+        Start-Sleep -Milliseconds 300
     }
-    throw '未能滚动到须知底部并确认「同意本条款」，请手动检查页面'
+    throw '滚动后未看到可点击的「同意本条款」，请手动检查页面或重新校准窗口缩放'
 }
 
 function Open-Venue($Browser) {
@@ -489,6 +506,7 @@ function Validate-Config($Config) {
 
 try {
     if ($Inspect) {
+        Register-BookingProcess
         $browser = Open-Booking
         Inspect-Window $browser
         exit 0
@@ -497,6 +515,7 @@ try {
     $config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Validate-Config $config
     if ($ValidateOnly) { Write-Host '配置检查通过'; exit 0 }
+    Register-BookingProcess
     $browser = Open-Booking
     Log '已检测到预约弹窗并放大'
     Accept-Notice $browser
