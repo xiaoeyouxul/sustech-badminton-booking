@@ -592,7 +592,17 @@ function Read-FocusedText {
         Start-Sleep -Milliseconds 120
         return [System.Windows.Forms.Clipboard]::GetText()
     } finally {
-        if ($null -ne $previous) { [System.Windows.Forms.Clipboard]::SetDataObject($previous, $true) }
+        if ($null -ne $previous) {
+            $restored = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+                try {
+                    [System.Windows.Forms.Clipboard]::SetDataObject($previous, $true, 5, 100)
+                    $restored = $true
+                    break
+                } catch { Start-Sleep -Milliseconds 150 }
+            }
+            if (-not $restored) { Log '原剪贴板内容暂时无法恢复，请勿依赖本次复制的内容' }
+        }
     }
 }
 
