@@ -170,7 +170,7 @@ function Scroll-To-Top($Window) {
 }
 
 function Inspect-Window($Window) {
-    $terms = '工作台|校园场馆|场地预约|预约须知|协议|润扬|号场|今天|明天|后天|选择日期|预约时间|使用人数|手机号码|已满|预约成功|我的'
+    $terms = '工作台|校园场馆|场地预约|预约须知|协议|润[杨扬]|号场|今天|明天|后天|选择日期|预约时间|使用人数|手机号码|已满|预约成功|我的'
     $names = foreach ($e in (Elements $Window)) {
         try {
             $n = [string]$e.Current.Name
@@ -203,34 +203,46 @@ function Open-Booking {
     Focus-Maximize $wecom
     Log '已放大企业微信，开始打开工作台'
     try {
-        $positionOnly = $false
-        if (-not (Click-Text $wecom '工作台' -Exact)) {
-            $positionOnly = $true
-            Log '未读到工作台控件，按电脑版截图中的左侧位置点击'
-            Click-WindowRatio $wecom 0.016 0.529
+        if ($null -eq (Find-Text $wecom '企业微信-工作台' -Exact)) {
+            if (-not (Click-Text $wecom '工作台' -Exact)) {
+                Log '未读到工作台按钮，按最大化窗口的左侧位置点击'
+                Click-WindowRatio $wecom 0.016 0.529
+            }
+            if ($null -eq (Wait-Text $wecom '企业微信-工作台' 5 -Exact)) {
+                Log '尚未进入工作台，再尝试点击一次'
+                Click-WindowRatio $wecom 0.016 0.529
+                if ($null -eq (Wait-Text $wecom '企业微信-工作台' 5 -Exact)) {
+                    throw '点击后仍未进入工作台'
+                }
+            }
         }
-        Start-Sleep -Milliseconds 650
-        Log '尝试打开校园场馆/会议预约系统'
-        $appCard = if ($positionOnly) { $null } else { Wait-Text $wecom '校园场馆/会议预约系统' 2 }
+        Log '已确认进入工作台，打开校园场馆/会议预约系统'
+        $appCard = Wait-Text $wecom '校园场馆/会议预约系统' 1
         if ($null -eq $appCard -or -not (Click-Element $appCard)) {
             Click-WindowRatio $wecom 0.938 0.294
         }
-        Start-Sleep -Milliseconds 850
-        Log '尝试点击底部场地预约'
-        $bookingTab = if ($positionOnly) { $null } else { Wait-Text $wecom '场地预约' 2 -Exact }
-        if ($null -eq $bookingTab -or -not (Click-Element $bookingTab)) {
+        Start-Sleep -Milliseconds 1500
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            Log ("尝试点击底部场地预约（第 {0} 次）" -f $attempt)
             Click-WindowRatio $wecom 0.267 0.982
+            $browser = Wait-BookingWindow 3
+            if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
         }
     } catch {
         Log ('企业微信自动导航未完成：' + $_.Exception.Message)
     }
-    Log '正在等待独立的场地预约弹窗（最多 8 秒）'
-    $browser = Wait-BookingWindow 8
-    if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
     Log '未检测到预约弹窗。请手动打开「工作台 → 校园场馆/会议预约系统 → 场地预约」；程序再等待 30 秒。'
     $browser = Wait-BookingWindow 30 5
     if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
     throw '预约弹窗未出现。请先在企业微信中打开场地预约弹窗，再运行程序。'
+}
+
+function Find-Venue($Browser) {
+    foreach ($label in @('润杨羽毛球馆', '润扬羽毛球馆')) {
+        $venue = Find-Text $Browser $label -Exact
+        if ($null -ne $venue) { return $venue }
+    }
+    return $null
 }
 
 function Accept-Notice($Browser) {
@@ -255,16 +267,17 @@ function Accept-Notice($Browser) {
 }
 
 function Open-Venue($Browser) {
-    Log '寻找润扬羽毛球馆'
+    Log '寻找润杨羽毛球馆'
     Scroll-To-Top $Browser
     for ($i = 0; $i -lt 16; $i++) {
-        if (Click-Text $Browser '润扬羽毛球馆' -Exact) {
+        $venue = Find-Venue $Browser
+        if ($null -ne $venue -and (Click-Element $venue)) {
             Start-Sleep -Milliseconds 350
             return
         }
         Scroll-In $Browser 2
     }
-    throw '未找到润扬羽毛球馆'
+    throw '未找到润杨羽毛球馆'
 }
 
 function Open-Court($Browser, [int]$Court) {
@@ -369,7 +382,7 @@ function Reset-To-Courts($Browser) {
                 try { if ((Rect-OK $e) -and $e.Current.Name -match '(^|羽毛球馆)\s*\d+号场') { return $true } } catch { }
             }
         }
-        if ($null -ne (Find-Text $Browser '润扬羽毛球馆' -Exact)) { Open-Venue $Browser; return $true }
+        if ($null -ne (Find-Venue $Browser)) { Open-Venue $Browser; return $true }
         if (-not (Try-Return $Browser)) { return $false }
     }
     return $false
@@ -381,7 +394,7 @@ function Reopen-Venue($Browser) {
         foreach ($e in (Elements $Browser)) {
             try { if ((Rect-OK $e) -and $e.Current.Name -match '(^|羽毛球馆)\s*\d+号场') { $hasCourt = $true; break } } catch { }
         }
-        if (-not $hasCourt -and $null -ne (Find-Text $Browser '润扬羽毛球馆' -Exact)) {
+        if (-not $hasCourt -and $null -ne (Find-Venue $Browser)) {
             Open-Venue $Browser
             return $true
         }
@@ -438,7 +451,7 @@ try {
     $browser = Open-Booking
     Log '已检测到预约弹窗并放大'
     Accept-Notice $browser
-    if ($null -eq (Find-Text $browser '润扬羽毛球馆' -Exact)) {
+    if ($null -eq (Find-Venue $browser)) {
         if (-not (Click-Text $browser '场地预约' -Exact)) { throw '未找到场地预约首页' }
     }
     Open-Venue $browser
