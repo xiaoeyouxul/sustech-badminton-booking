@@ -423,11 +423,28 @@ function Open-Court($Browser, [int]$Court) {
     return $false
 }
 
-function Select-Day($Browser, [datetime]$Day) {
-    $offset = [int]($Day.Date - (Get-Date).Date).TotalDays
+function Test-DaySelected($Browser, [double]$XRatio) {
+    $line = Get-WindowPixel $Browser $XRatio 0.388
+    return ($line.R -lt 100 -and $line.G -gt 140 -and $line.G -lt 220 -and
+        $line.B -gt 130 -and $line.B -lt 220)
+}
+
+function Select-Day($Browser, [datetime]$Day, [timespan]$ReleaseTime) {
+    $now = Get-Date
+    $offset = [int]($Day.Date - $now.Date).TotalDays
     $label = switch ($offset) { 0 { '今天' } 1 { '明天' } 2 { '后天' } default { throw '目标日期不在今天、明天、后天范围内' } }
-    if (-not (Click-Text $Browser $label -Exact)) { throw "未找到日期选项 $label" }
-    Start-Sleep -Milliseconds 250
+    $tabCount = if ($now.TimeOfDay -ge $ReleaseTime) { 3 } else { 2 }
+    if ($offset -ge $tabCount) { throw "目标日期 $($Day.ToString('yyyy-MM-dd')) 尚未开放，请在当天开放时间后运行" }
+    $x = if ($tabCount -eq 3) { @(0.125, 0.375, 0.625)[$offset] } else { @(0.166, 0.5)[$offset] }
+    Log ("选择 {0}（{1}，当前按 {2} 个日期选项定位）" -f $label, $Day.ToString('yyyy-MM-dd'), $tabCount)
+    if (Test-DaySelected $Browser $x) { return }
+    Click-WindowRatio $Browser $x 0.367
+    $until = (Get-Date).AddSeconds(2)
+    do {
+        Start-Sleep -Milliseconds 150
+        if (Test-DaySelected $Browser $x) { return }
+    } while ((Get-Date) -lt $until)
+    throw "点击 $label 后未确认选中；请检查日期栏是否已刷新"
 }
 
 function Slot-Labels([string]$Start, [string]$End) {
@@ -620,7 +637,7 @@ try {
             continue
         }
         $targetDay = Resolve-TargetDay ([string]$config.date)
-        Select-Day $browser $targetDay
+        Select-Day $browser $targetDay $release.TimeOfDay
         if (-not (Select-Slots $browser $pair.Range)) {
             Log '所选时段已满或无法点击'
             if (-not (Try-Return $browser)) {
