@@ -766,13 +766,11 @@ try {
             continue
         }
         $backs = 0
-        Fill-Near $browser '使用人数' ([string]$config.people)
-        Fill-Near $browser '手机号码' ([string]$config.phone)
+        Fill-VisibleField $browser '使用人数' ([string]$config.people)
+        Fill-VisibleField $browser '手机号码' ([string]$config.phone)
         if ($config.dry_run) { Log '试运行已填写表单，未提交'; exit 0 }
-        if (-not (Click-Text $browser '预约' -Exact)) {
-            Log '未读到预约按钮，按可见页面底部位置点击'
-            Click-WindowRatio $browser 0.50 0.780
-        }
+        Log '表单已核对，点击页面底部预约按钮'
+        Click-WindowRatio $browser 0.50 0.780
         $result = Verify-Result $browser $pair.Court $pair.Range
         if ($result -eq 'success') { Log '页面显示预约成功，请在我的预约中核对详情'; exit 0 }
         if ($result -eq 'unknown') { throw '提交状态不明，请手动检查我的预约；程序不会重复提交' }
