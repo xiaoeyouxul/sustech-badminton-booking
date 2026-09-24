@@ -147,6 +147,13 @@ function Focus-Maximize($Window) {
     [void][NativeUi]::ShowWindow($h, 3)
     [void][NativeUi]::SetForegroundWindow($h)
     Start-Sleep -Milliseconds 350
+    $rect = New-Object NativeUi+NativeRect
+    $workArea = [System.Windows.Forms.Screen]::FromHandle($h).WorkingArea
+    if (-not [NativeUi]::GetWindowRect($h, [ref]$rect) -or
+        ($rect.Right - $rect.Left) -lt $workArea.Width * 0.9 -or
+        ($rect.Bottom - $rect.Top) -lt $workArea.Height * 0.9) {
+        throw '窗口未成功最大化，请先放大窗口再重试'
+    }
 }
 
 function Scroll-In($Window, [int]$Steps = 5, [switch]$Modal) {
@@ -245,23 +252,65 @@ function Find-Venue($Browser) {
     return $null
 }
 
+function Find-NoticeDialog($Browser) {
+    $title = Find-Text $Browser '场地预约须知' -Exact
+    if ($null -eq $title) { return $null }
+    $browserRect = $Browser.Current.BoundingRectangle
+    $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+    $e = $title
+    for ($depth = 0; $depth -lt 10; $depth++) {
+        try {
+            $e = $walker.GetParent($e)
+            if ($null -eq $e) { break }
+            $r = $e.Current.BoundingRectangle
+            if ($r.Width -ge 250 -and $r.Height -ge 250 -and
+                $r.Width -lt $browserRect.Width * 0.8 -and
+                $r.Height -lt $browserRect.Height * 0.95) { return $e }
+        } catch { break }
+    }
+    return $null
+}
+
+function Find-NoticeAgreeButton($Dialog) {
+    foreach ($e in (Elements $Dialog)) {
+        try {
+            if ((Rect-OK $e) -and
+                $e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and
+                $e.Current.Name -eq '同意本条款' -and
+                $e.Current.IsEnabled) { return $e }
+        } catch { }
+    }
+    return $null
+}
+
+function Scroll-Notice($Dialog) {
+    $r = $Dialog.Current.BoundingRectangle
+    $x = [int]($r.Left + $r.Width * 0.5)
+    $y = [int]($r.Top + $r.Height * 0.55)
+    [void][NativeUi]::SetCursorPos($x, $y)
+    Start-Sleep -Milliseconds 100
+    for ($step = 0; $step -lt 4; $step++) {
+        [NativeUi]::mouse_event(0x0800, 0, 0, -120, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 100
+    }
+}
+
 function Accept-Notice($Browser) {
+    Focus-Maximize $Browser
     Log '检查场地预约须知'
     if ($null -eq (Find-Text $Browser '场地预约须知' -Exact)) { return }
-    for ($i = 0; $i -lt 36; $i++) {
-        if ($i -gt 0 -and $i % 8 -eq 0) { Log '仍在下滑场地预约须知' }
-        $agree = Find-Text $Browser '同意本条款' -Exact
-        if ($null -ne $agree) {
-            try { $enabled = $agree.Current.IsEnabled } catch { $enabled = $false }
-            if ($enabled -and (Click-Element $agree)) {
-                if ($null -eq (Wait-Text $Browser '场地预约须知' 2 -Exact)) {
-                    Log '已同意场地预约须知'
-                    return
-                }
-                Log '同意按钮尚未生效，继续下滑须知'
+    for ($i = 0; $i -lt 24; $i++) {
+        $dialog = Find-NoticeDialog $Browser
+        if ($null -eq $dialog) { throw '无法识别场地预约须知弹窗，请手动检查页面' }
+        $agree = Find-NoticeAgreeButton $dialog
+        if ($null -ne $agree -and (Click-Element $agree)) {
+            if ($null -eq (Wait-Text $Browser '场地预约须知' 2 -Exact)) {
+                Log '已同意场地预约须知'
+                return
             }
         }
-        Scroll-In $Browser 2 -Modal
+        if ($i % 4 -eq 0) { Log '鼠标置于须知内容区，向下滚动阅读' }
+        Scroll-Notice $dialog
     }
     throw '未能滚动到须知底部并确认「同意本条款」，请手动检查页面'
 }
