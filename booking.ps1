@@ -309,18 +309,29 @@ function Scroll-Notice($Browser) {
     $y = [int]($r.Top + ($r.Bottom - $r.Top) * 0.55)
     [void][NativeUi]::SetCursorPos($x, $y)
     Start-Sleep -Milliseconds 80
-    for ($step = 0; $step -lt 8; $step++) {
+    for ($step = 0; $step -lt 30; $step++) {
         [NativeUi]::mouse_event(0x0800, 0, 0, -120, [UIntPtr]::Zero)
-        Start-Sleep -Milliseconds 55
+        Start-Sleep -Milliseconds 25
     }
+}
+
+function Test-NoticeVisible($Browser) {
+    $panel = Get-WindowPixel $Browser 0.46 0.23
+    $shade = Get-WindowPixel $Browser 0.75 0.45
+    return ($panel.R -gt 230 -and $panel.G -gt 230 -and $panel.B -gt 230 -and
+        $shade.R -lt 150 -and $shade.G -lt 150 -and $shade.B -lt 150)
 }
 
 function Accept-Notice($Browser) {
     Focus-Maximize $Browser
     Log '检查场地预约须知（依据你提供的最大化窗口截图）'
-    $outside = Get-WindowPixel $Browser 0.75 0.45
-    $outsideBrightness = ($outside.R + $outside.G + $outside.B) / 3
-    if ($outsideBrightness -gt 170) { Log '须知弹窗已关闭'; return }
+    $until = (Get-Date).AddSeconds(6)
+    while (-not (Test-NoticeVisible $Browser)) {
+        if ((Get-Date) -ge $until) {
+            throw '未能确认场地预约须知弹窗，请检查预约窗口是否最大化及浏览器缩放'
+        }
+        Start-Sleep -Milliseconds 250
+    }
     for ($i = 0; $i -le 4; $i++) {
         $button = Get-WindowPixel $Browser 0.46 0.784
         if ($button.R -lt 70 -and $button.G -gt 140 -and $button.G -lt 230 -and $button.B -lt 150) {
@@ -329,8 +340,7 @@ function Accept-Notice($Browser) {
             $until = (Get-Date).AddSeconds(3)
             do {
                 Start-Sleep -Milliseconds 250
-                $after = Get-WindowPixel $Browser 0.75 0.45
-                if ((($after.R + $after.G + $after.B) / 3) -gt 170) {
+                if (-not (Test-NoticeVisible $Browser)) {
                     Log '须知弹窗已关闭'
                     return
                 }
