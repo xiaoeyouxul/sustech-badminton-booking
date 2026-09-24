@@ -451,6 +451,12 @@ function Select-Day($Browser, [datetime]$Day, [timespan]$ReleaseTime) {
     if ($offset -ge $tabCount) { throw "目标日期 $($Day.ToString('yyyy-MM-dd')) 尚未开放，请在当天开放时间后运行" }
     $x = if ($tabCount -eq 3) { @(0.125, 0.375, 0.625)[$offset] } else { @(0.166, 0.5)[$offset] }
     Log ("选择 {0}（{1}，当前按 {2} 个日期选项定位）" -f $label, $Day.ToString('yyyy-MM-dd'), $tabCount)
+    if ($offset -eq 0) {
+        Click-WindowRatio $Browser $x 0.367
+        Start-Sleep -Milliseconds 250
+        Log '已点击今天日期栏'
+        return
+    }
     $until = (Get-Date).AddSeconds(6)
     do {
         if (Test-DaySelected $Browser $x) { return }
