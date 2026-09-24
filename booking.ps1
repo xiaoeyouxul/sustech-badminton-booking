@@ -452,9 +452,7 @@ function Select-Day($Browser, [datetime]$Day, [timespan]$ReleaseTime) {
     $x = if ($tabCount -eq 3) { @(0.125, 0.375, 0.625)[$offset] } else { @(0.166, 0.5)[$offset] }
     Log ("选择 {0}（{1}，当前按 {2} 个日期选项定位）" -f $label, $Day.ToString('yyyy-MM-dd'), $tabCount)
     if ($offset -eq 0) {
-        Click-WindowRatio $Browser $x 0.367
-        Start-Sleep -Milliseconds 250
-        Log '已点击今天日期栏'
+        Log '球场页默认显示今天，沿用当前日期'
         return
     }
     $until = (Get-Date).AddSeconds(6)
@@ -557,7 +555,7 @@ function Read-BookingMinutes($Browser) {
 
 function Fill-Near($Browser, [string]$Label, [string]$Value) {
     $direct = Find-Text $Browser $Label
-    if ($null -eq $direct) { throw "未找到表单字段：$Label" }
+    if ($null -eq $direct) { Fill-VisibleField $Browser $Label $Value; return }
     $labelRect = $direct.Current.BoundingRectangle
     $edits = foreach ($e in (Elements $Browser)) {
         try {
@@ -584,6 +582,36 @@ function Try-Return($Browser) {
     Click-WindowRatio $Browser 0.028 0.095
     Start-Sleep -Milliseconds 350
     return $true
+}
+
+function Read-FocusedText {
+    $previous = [System.Windows.Forms.Clipboard]::GetDataObject()
+    try {
+        [System.Windows.Forms.SendKeys]::SendWait('^a')
+        [System.Windows.Forms.SendKeys]::SendWait('^c')
+        Start-Sleep -Milliseconds 120
+        return [System.Windows.Forms.Clipboard]::GetText()
+    } finally {
+        if ($null -ne $previous) { [System.Windows.Forms.Clipboard]::SetDataObject($previous, $true) }
+    }
+}
+
+function Fill-VisibleField($Browser, [string]$Label, [string]$Value) {
+    $y = switch ($Label) { '使用人数' { 0.739 } '手机号码' { 0.700 } default { throw "未找到表单字段：$Label" } }
+    Click-WindowRatio $Browser 0.11 $y
+    $current = [string](Read-FocusedText)
+    if ($current.Trim() -eq $Value) { Log ("已核对{0}" -f $Label); return }
+    if ($Label -eq '手机号码' -and $current -match ('手机号码\s*[:：]?\s*' + [regex]::Escape($Value))) {
+        Log '页面预填手机号与配置一致'
+        return
+    }
+    if ($current.Length -gt 30) { throw "$Label 的输入框未获得焦点，已停止" }
+    [System.Windows.Forms.SendKeys]::SendWait($Value)
+    Start-Sleep -Milliseconds 150
+    Click-WindowRatio $Browser 0.11 $y
+    $entered = [string](Read-FocusedText)
+    if ($entered.Trim() -ne $Value) { throw "$Label 填写后无法核对，已停止" }
+    Log ("已填写并核对{0}" -f $Label)
 }
 
 function Reset-To-Courts($Browser) {
@@ -723,7 +751,10 @@ try {
         Fill-Near $browser '使用人数' ([string]$config.people)
         Fill-Near $browser '手机号码' ([string]$config.phone)
         if ($config.dry_run) { Log '试运行已填写表单，未提交'; exit 0 }
-        if (-not (Click-Text $browser '预约' -Exact)) { throw '找不到预约按钮，未提交' }
+        if (-not (Click-Text $browser '预约' -Exact)) {
+            Log '未读到预约按钮，按可见页面底部位置点击'
+            Click-WindowRatio $browser 0.50 0.780
+        }
         $result = Verify-Result $browser $pair.Court $pair.Range
         if ($result -eq 'success') { Log '页面显示预约成功，请在我的预约中核对详情'; exit 0 }
         if ($result -eq 'unknown') { throw '提交状态不明，请手动检查我的预约；程序不会重复提交' }
