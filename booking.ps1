@@ -325,8 +325,17 @@ function Verify-Result($Browser, [int]$Court, $Range) {
     return 'unknown'
 }
 
+function Resolve-TargetDay([string]$DateSetting) {
+    if ($DateSetting -eq 'auto_third_day') { return (Get-Date).Date.AddDays(2) }
+    foreach ($format in @('yyyy-MM-dd', 'yyyy-M-d')) {
+        try { return [datetime]::ParseExact($DateSetting, $format, [Globalization.CultureInfo]::InvariantCulture) }
+        catch { }
+    }
+    throw 'date 请填 auto_third_day 或年月日，例如 2026-09-25'
+}
+
 function Validate-Config($Config) {
-    $day = if ($Config.date -eq 'auto_third_day') { (Get-Date).Date.AddDays(2) } else { [datetime]::ParseExact([string]$Config.date, 'yyyy-MM-dd', $null) }
+    $day = Resolve-TargetDay ([string]$Config.date)
     $offset = [int]($day.Date - (Get-Date).Date).TotalDays
     if ($offset -lt 0 -or $offset -gt 2) { throw 'date 必须是今天、明天或后天' }
     if (@($Config.time_ranges).Count -eq 0) { throw '请配置至少一个时间段' }
@@ -380,7 +389,7 @@ try {
             if ($resets -gt [int]$config.max_navigation_resets -or -not (Reset-To-Courts $browser)) { throw '无法稳定进入目标球场，已停止' }
             continue
         }
-        $targetDay = if ($config.date -eq 'auto_third_day') { (Get-Date).Date.AddDays(2) } else { [datetime]::ParseExact([string]$config.date, 'yyyy-MM-dd', $null) }
+        $targetDay = Resolve-TargetDay ([string]$config.date)
         Select-Day $browser $targetDay
         if (-not (Select-Slots $browser $pair.Range)) {
             Log '所选时段已满或无法点击'
