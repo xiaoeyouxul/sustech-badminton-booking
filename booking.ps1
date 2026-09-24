@@ -226,6 +226,16 @@ function Inspect-Window($Window) {
     $names | Sort-Object -Unique | Select-Object -First 100
 }
 
+function Scroll-To-Bottom($Window) {
+    $r = $Window.Current.BoundingRectangle
+    [void][NativeUi]::SetCursorPos([int]($r.Left + $r.Width / 2), [int]($r.Top + $r.Height * 0.65))
+    for ($i = 0; $i -lt 16; $i++) {
+        [NativeUi]::mouse_event(0x0800, 0, 0, -120, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 15
+    }
+    Start-Sleep -Milliseconds 250
+}
+
 function Wait-BookingWindow([int]$TimeoutSeconds, [int]$ProgressSeconds = 0) {
     $until = (Get-Date).AddSeconds($TimeoutSeconds)
     $lastProgress = Get-Date
@@ -367,15 +377,38 @@ function Open-Venue($Browser) {
 }
 
 function Open-Court($Browser, [int]$Court) {
-    $label = "${Court}号场"
-    Scroll-To-Top $Browser
-    for ($i = 0; $i -lt 12; $i++) {
-        $hit = Find-Text $Browser $label -Exact
-        if ($null -ne $hit -and (Click-Element $hit)) {
-            Start-Sleep -Milliseconds 300
-            if ($null -ne (Wait-Text $Browser '后天' 5 -Exact)) { return $true }
-        }
-        Scroll-In $Browser 2
+    # Court cards are ordered as shown in the user's maximized desktop screenshots.
+    $topPositions = @{ 5 = 0.20; 3 = 0.34; 8 = 0.47; 2 = 0.61; 1 = 0.75; 7 = 0.89 }
+    $bottomPositions = @{ 9 = 0.45; 6 = 0.59; 4 = 0.72; 10 = 0.86 }
+    if ($topPositions.ContainsKey($Court)) {
+        Log ("定位 {0} 号场：滚动到球场列表顶部" -f $Court)
+        Scroll-To-Top $Browser
+        $y = $topPositions[$Court]
+        $sampleY = 0.35
+    } elseif ($bottomPositions.ContainsKey($Court)) {
+        Log ("定位 {0} 号场：快速滚动到球场列表底部" -f $Court)
+        Scroll-To-Bottom $Browser
+        $y = $bottomPositions[$Court]
+        $sampleY = $y
+    } else {
+        return $false
+    }
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $before = Get-WindowPixel $Browser 0.05 $sampleY
+        Click-WindowRatio $Browser 0.16 $y
+        $until = (Get-Date).AddSeconds(2)
+        do {
+            Start-Sleep -Milliseconds 250
+            $after = Get-WindowPixel $Browser 0.05 $sampleY
+            $change = [Math]::Abs($after.R - $before.R) +
+                [Math]::Abs($after.G - $before.G) +
+                [Math]::Abs($after.B - $before.B)
+            if ($change -gt 75) {
+                Log ("{0} 号场页面已打开" -f $Court)
+                return $true
+            }
+        } while ((Get-Date) -lt $until)
+        Log ("{0} 号场第 {1} 次点击后页面未变化" -f $Court, $attempt)
     }
     return $false
 }
