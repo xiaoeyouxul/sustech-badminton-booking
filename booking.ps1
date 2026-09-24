@@ -43,7 +43,17 @@ function Elements($Root) {
 }
 
 function Find-Text($Root, [string]$Text, [switch]$Exact) {
-    $matches = foreach ($e in (Elements $Root)) {
+    if ($null -eq $Root) { return $null }
+    $candidates = if ($Exact) {
+        try {
+            $condition = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::NameProperty, $Text)
+            @($Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition))
+        } catch { @() }
+    } else {
+        Elements $Root
+    }
+    $matches = foreach ($e in $candidates) {
         try {
             if (-not (Rect-OK $e)) { continue }
             $name = [string]$e.Current.Name
@@ -121,9 +131,7 @@ function Find-BookingWindow {
         try {
             $name = [string]$w.Current.Name
             if ($name -match 'reservation\.sustech') { return $w }
-            if ((Proc-Name $w) -match 'WXWorkWeb|msedge|chrome') {
-                if ($null -ne (Find-Text $w 'reservation.sustech.edu.cn')) { return $w }
-            }
+            if ((Proc-Name $w) -match 'WXWorkWeb|msedge|chrome' -and $name -match '场地预约') { return $w }
         } catch { }
     }
     return $null
@@ -168,48 +176,62 @@ function Inspect-Window($Window) {
     $names | Sort-Object -Unique | Select-Object -First 100
 }
 
+function Wait-BookingWindow([int]$TimeoutSeconds, [int]$ProgressSeconds = 0) {
+    $until = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastProgress = Get-Date
+    do {
+        $browser = Find-BookingWindow
+        if ($null -ne $browser) { return $browser }
+        if ($ProgressSeconds -gt 0 -and ((Get-Date) - $lastProgress).TotalSeconds -ge $ProgressSeconds) {
+            Log '仍在等待独立的场地预约弹窗'
+            $lastProgress = Get-Date
+        }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $until)
+    return $null
+}
+
 function Open-Booking {
     $browser = Find-BookingWindow
     if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
     $wecom = Find-WeCom
     if ($null -eq $wecom) { throw '未找到企业微信。请先登录并打开电脑版企业微信。' }
     Focus-Maximize $wecom
+    Log '已放大企业微信，开始打开工作台'
     try {
+        $positionOnly = $false
         if (-not (Click-Text $wecom '工作台' -Exact)) {
+            $positionOnly = $true
             Log '未读到工作台控件，按电脑版截图中的左侧位置点击'
             Click-WindowRatio $wecom 0.016 0.529
         }
         Start-Sleep -Milliseconds 650
-        $appCard = Wait-Text $wecom '校园场馆/会议预约系统' 2
+        Log '尝试打开校园场馆/会议预约系统'
+        $appCard = if ($positionOnly) { $null } else { Wait-Text $wecom '校园场馆/会议预约系统' 2 }
         if ($null -eq $appCard -or -not (Click-Element $appCard)) {
             Click-WindowRatio $wecom 0.938 0.294
         }
         Start-Sleep -Milliseconds 850
-        $bookingTab = Wait-Text $wecom '场地预约' 2 -Exact
+        Log '尝试点击底部场地预约'
+        $bookingTab = if ($positionOnly) { $null } else { Wait-Text $wecom '场地预约' 2 -Exact }
         if ($null -eq $bookingTab -or -not (Click-Element $bookingTab)) {
             Click-WindowRatio $wecom 0.267 0.982
         }
     } catch {
         Log ('企业微信自动导航未完成：' + $_.Exception.Message)
     }
-    $until = (Get-Date).AddSeconds(20)
-    do {
-        $browser = Find-BookingWindow
-        if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
-        Start-Sleep -Milliseconds 400
-    } while ((Get-Date) -lt $until)
-    Log '尚未检测到独立预约弹窗。请手动打开「工作台 → 校园场馆/会议预约系统 → 场地预约」；程序继续等待 120 秒。'
-    $until = (Get-Date).AddSeconds(120)
-    do {
-        $browser = Find-BookingWindow
-        if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
-        Start-Sleep -Milliseconds 400
-    } while ((Get-Date) -lt $until)
+    Log '正在等待独立的场地预约弹窗（最多 8 秒）'
+    $browser = Wait-BookingWindow 8
+    if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
+    Log '未检测到预约弹窗。请手动打开「工作台 → 校园场馆/会议预约系统 → 场地预约」；程序再等待 30 秒。'
+    $browser = Wait-BookingWindow 30 5
+    if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
     throw '预约弹窗未出现。请先在企业微信中打开场地预约弹窗，再运行程序。'
 }
 
 function Accept-Notice($Browser) {
-    if ($null -eq (Find-Text $Browser '场地预约须知')) { return }
+    Log '检查场地预约须知'
+    if ($null -eq (Find-Text $Browser '场地预约须知' -Exact)) { return }
     for ($i = 0; $i -lt 16; $i++) {
         foreach ($label in @('同意协议', '我已阅读并同意', '同意')) {
             if (Click-Text $Browser $label -Exact) { Log '已同意场地预约须知'; return }
@@ -220,6 +242,7 @@ function Accept-Notice($Browser) {
 }
 
 function Open-Venue($Browser) {
+    Log '寻找润扬羽毛球馆'
     Scroll-To-Top $Browser
     for ($i = 0; $i -lt 16; $i++) {
         if (Click-Text $Browser '润扬羽毛球馆' -Exact) {
@@ -400,6 +423,7 @@ try {
     Validate-Config $config
     if ($ValidateOnly) { Write-Host '配置检查通过'; exit 0 }
     $browser = Open-Booking
+    Log '已检测到预约弹窗并放大'
     Accept-Notice $browser
     if ($null -eq (Find-Text $browser '润扬羽毛球馆' -Exact)) {
         if (-not (Click-Text $browser '场地预约' -Exact)) { throw '未找到场地预约首页' }
@@ -408,7 +432,15 @@ try {
     $release = [datetime]::ParseExact([string]$config.release_time, 'HH:mm:ss', $null)
     if ($config.wait_for_release) {
         $deadline = (Get-Date).Date.Add($release.TimeOfDay)
-        while ((Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+        if ((Get-Date) -lt $deadline) {
+            Log ("已就绪，等待 {0:HH:mm:ss} 开放" -f $deadline)
+            while ((Get-Date) -lt $deadline) {
+                $remaining = ($deadline - (Get-Date)).TotalSeconds
+                if ($remaining -gt 10) { Start-Sleep -Milliseconds 1000 }
+                else { Start-Sleep -Milliseconds 100 }
+            }
+            Log '已到开放时间，开始尝试'
+        }
     }
     $pairs = @()
     if ($config.priority_mode -eq 'court_first') {
