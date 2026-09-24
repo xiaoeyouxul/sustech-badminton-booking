@@ -101,7 +101,7 @@ function Find-BookingWindow {
     foreach ($w in (Top-Windows)) {
         try {
             $name = [string]$w.Current.Name
-            if ($name -match 'reservation\.sustech\.edu\.cn') { return $w }
+            if ($name -match 'reservation\.sustech') { return $w }
             if ((Proc-Name $w) -match 'WXWorkWeb|msedge|chrome') {
                 if ($null -ne (Find-Text $w 'reservation.sustech.edu.cn')) { return $w }
             }
@@ -155,18 +155,26 @@ function Open-Booking {
     $wecom = Find-WeCom
     if ($null -eq $wecom) { throw '未找到企业微信。请先登录并打开电脑版企业微信。' }
     Focus-Maximize $wecom
-    if (-not (Click-Text $wecom '工作台' -Exact)) { throw '未找到企业微信工作台按钮' }
-    if ($null -eq (Wait-Text $wecom '校园场馆/会议预约系统' 8)) { throw '未找到校园场馆/会议预约系统' }
-    if (-not (Click-Text $wecom '校园场馆/会议预约系统')) { throw '无法打开预约应用' }
-    if ($null -eq (Wait-Text $wecom '场地预约' 8 -Exact)) { throw '未找到应用底部的场地预约' }
-    if (-not (Click-Text $wecom '场地预约' -Exact)) { throw '无法打开场地预约' }
-    $until = (Get-Date).AddSeconds(15)
+    $opened = $false
+    if (Click-Text $wecom '工作台' -Exact) {
+        if ($null -ne (Wait-Text $wecom '校园场馆/会议预约系统' 8)) {
+            if (Click-Text $wecom '校园场馆/会议预约系统') {
+                if ($null -ne (Wait-Text $wecom '场地预约' 8 -Exact)) {
+                    $opened = Click-Text $wecom '场地预约' -Exact
+                }
+            }
+        }
+    }
+    if (-not $opened) {
+        Log '电脑版企业微信未提供可识别的导航按钮。请手动依次打开工作台、校园场馆/会议预约系统、场地预约；程序正在等待预约弹窗（最多 120 秒）。'
+    }
+    $until = (Get-Date).AddSeconds($(if ($opened) { 20 } else { 120 }))
     do {
         $browser = Find-BookingWindow
         if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
         Start-Sleep -Milliseconds 400
     } while ((Get-Date) -lt $until)
-    throw '预约弹窗未出现'
+    throw '预约弹窗未出现。请先在企业微信中打开场地预约弹窗，再运行程序。'
 }
 
 function Accept-Notice($Browser) {
