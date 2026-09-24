@@ -316,12 +316,15 @@ function Accept-Notice($Browser) {
         if ($button.R -lt 70 -and $button.G -gt 140 -and $button.G -lt 230 -and $button.B -lt 150) {
             Log '已滚动到底部，点击「同意本条款」'
             Click-WindowRatio $Browser 0.50 0.795
-            Start-Sleep -Milliseconds 900
-            $after = Get-WindowPixel $Browser 0.75 0.45
-            if ((($after.R + $after.G + $after.B) / 3) -gt 170) {
-                Log '须知弹窗已关闭'
-                return
-            }
+            $until = (Get-Date).AddSeconds(3)
+            do {
+                Start-Sleep -Milliseconds 250
+                $after = Get-WindowPixel $Browser 0.75 0.45
+                if ((($after.R + $after.G + $after.B) / 3) -gt 170) {
+                    Log '须知弹窗已关闭'
+                    return
+                }
+            } while ((Get-Date) -lt $until)
             throw '已点击同意本条款，但弹窗仍在；已停止避免重复点击'
         }
         if ($i -eq 4) { break }
