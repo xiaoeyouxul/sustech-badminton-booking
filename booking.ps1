@@ -5,6 +5,10 @@
 )
 
 $ErrorActionPreference = 'Stop'
+$bookingProcess = Get-Process -Id $PID
+@{ process_id = $PID; start_ticks = $bookingProcess.StartTime.ToUniversalTime().Ticks } |
+    ConvertTo-Json -Compress |
+    Set-Content -LiteralPath (Join-Path $PSScriptRoot 'booking.pid.json') -Encoding ASCII
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type @'
@@ -232,13 +236,22 @@ function Open-Booking {
 function Accept-Notice($Browser) {
     Log '检查场地预约须知'
     if ($null -eq (Find-Text $Browser '场地预约须知' -Exact)) { return }
-    for ($i = 0; $i -lt 16; $i++) {
-        foreach ($label in @('同意协议', '我已阅读并同意', '同意')) {
-            if (Click-Text $Browser $label -Exact) { Log '已同意场地预约须知'; return }
+    for ($i = 0; $i -lt 36; $i++) {
+        if ($i -gt 0 -and $i % 8 -eq 0) { Log '仍在下滑场地预约须知' }
+        $agree = Find-Text $Browser '同意本条款' -Exact
+        if ($null -ne $agree) {
+            try { $enabled = $agree.Current.IsEnabled } catch { $enabled = $false }
+            if ($enabled -and (Click-Element $agree)) {
+                if ($null -eq (Wait-Text $Browser '场地预约须知' 2 -Exact)) {
+                    Log '已同意场地预约须知'
+                    return
+                }
+                Log '同意按钮尚未生效，继续下滑须知'
+            }
         }
         Scroll-In $Browser 2 -Modal
     }
-    throw '无法读到须知底部的同意按钮，请手动检查页面'
+    throw '未能滚动到须知底部并确认「同意本条款」，请手动检查页面'
 }
 
 function Open-Venue($Browser) {
@@ -434,8 +447,13 @@ try {
         $deadline = (Get-Date).Date.Add($release.TimeOfDay)
         if ((Get-Date) -lt $deadline) {
             Log ("已就绪，等待 {0:HH:mm:ss} 开放" -f $deadline)
+            $lastWaitLog = Get-Date
             while ((Get-Date) -lt $deadline) {
                 $remaining = ($deadline - (Get-Date)).TotalSeconds
+                if (((Get-Date) - $lastWaitLog).TotalSeconds -ge 30) {
+                    Log ("正在等待开放，约剩 {0} 秒" -f [Math]::Ceiling($remaining))
+                    $lastWaitLog = Get-Date
+                }
                 if ($remaining -gt 10) { Start-Sleep -Milliseconds 1000 }
                 else { Start-Sleep -Milliseconds 100 }
             }

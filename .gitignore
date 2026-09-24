@@ -1,5 +1,6 @@
 config.json
 booking.log
+booking.pid.json
 *.test.json
 *.zip
 vendor/
