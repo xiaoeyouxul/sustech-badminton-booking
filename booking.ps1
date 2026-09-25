@@ -265,7 +265,7 @@ function Wait-BookingWindow([int]$TimeoutSeconds, [int]$ProgressSeconds = 0) {
             Log '仍在等待独立的场地预约弹窗'
             $lastProgress = Get-Date
         }
-        Start-Sleep -Milliseconds 300
+        Start-Sleep -Milliseconds 100
     } while ((Get-Date) -lt $until)
     return $null
 }
@@ -298,8 +298,11 @@ function Open-Booking {
         Log '已确认进入工作台，打开校园场馆/会议预约系统'
         Start-Sleep -Milliseconds 300
         Click-WindowRatio $wecom 0.938 0.294
-        Start-Sleep -Milliseconds 1500
+        Start-Sleep -Milliseconds 200
         for ($attempt = 1; $attempt -le 5; $attempt++) {
+            # A slow popup may arrive just after the preceding wait ended.
+            $browser = Find-BookingWindow
+            if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
             Log ("尝试点击底部场地预约（第 {0} 次）" -f $attempt)
             Click-WindowRatio $wecom 0.267 0.982
             $browser = Wait-BookingWindow 3
