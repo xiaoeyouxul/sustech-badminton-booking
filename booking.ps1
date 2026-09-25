@@ -315,13 +315,9 @@ function Open-CampusApp($Wecom) {
     throw '校园场馆入口未显示或点击后仍停留工作台，停止点击底部场地预约；请手动打开校园场馆入口'
 }
 
-function Test-WorkbenchSelected($Wecom) {
-    # Prefer the visible Workbench title exposed by UI Automation. Pixel color
-    # varies with WeCom theme, DPI scaling and the selected icon background.
-    $title = Find-Text $Wecom '工作台' -Exact
-    if ($null -ne $title) { return $true }
+function Test-SidebarBlue($Wecom, [double]$CenterY) {
     $points = foreach ($x in @(0.012, 0.016, 0.020)) {
-        foreach ($y in @(0.510, 0.514, 0.518, 0.522, 0.526)) { $x; $y }
+        foreach ($dy in @(-0.008, -0.004, 0, 0.004, 0.008)) { $x; ($CenterY + $dy) }
     }
     $blue = 0
     foreach ($argb in [VisualProbe]::Sample([IntPtr]$Wecom.Current.NativeWindowHandle, [double[]]$points)) {
@@ -331,6 +327,28 @@ function Test-WorkbenchSelected($Wecom) {
     return ($blue -ge 2)
 }
 
+function Test-WorkbenchSelected($Wecom) {
+    return (Test-SidebarBlue $Wecom 0.518)
+}
+
+function Open-Workbench($Wecom) {
+    $deadline = (Get-Date).AddSeconds(5)
+    $clicks = 0; $nextClick = [datetime]::MinValue; $messageSamples = 0
+    do {
+        $Wecom = Wait-WeComTransition $Wecom
+        if (Test-WorkbenchSelected $Wecom) { return $Wecom }
+        if (Test-SidebarBlue $Wecom 0.079) { $messageSamples++ } else { $messageSamples = 0 }
+        if ($messageSamples -ge 2 -and $clicks -lt 2 -and (Get-Date) -ge $nextClick) {
+            $clicks++
+            Log ('已确认仍在消息页，点击工作台图标中心（第 {0} 次）' -f $clicks)
+            Click-WindowRatio $Wecom 0.016 0.518 -SettleMilliseconds 20
+            $nextClick = (Get-Date).AddMilliseconds(800)
+            $messageSamples = 0
+        }
+        Start-Sleep -Milliseconds 40
+    } while ((Get-Date) -lt $deadline)
+    throw '未确认进入工作台；仅在消息页已确认时重试，现已停止，请手动打开工作台'
+}
 function Wait-WeComTransition($Wecom) {
     # A tab transition can briefly replace the foreground native window.
     # Only adopt a visible full-size WXWork window; never refocus another app.
@@ -362,17 +380,7 @@ function Open-Booking {
     Focus-Maximize $wecom
     Log '已放大企业微信，开始打开工作台'
     try {
-        if (-not (Test-WorkbenchSelected $wecom)) {
-            Log '按固定位置点击工作台'
-            Click-WindowRatio $wecom 0.016 0.529 -SettleMilliseconds 20
-            $deadline = (Get-Date).AddSeconds(3)
-            do {
-                Start-Sleep -Milliseconds 40
-                $wecom = Wait-WeComTransition $wecom
-                if (Test-WorkbenchSelected $wecom) { break }
-            } while ((Get-Date) -lt $deadline)
-            if (-not (Test-WorkbenchSelected $wecom)) { throw '点击工作台后未确认页面切换，请手动进入；不会重复点击切回消息页' }
-        }
+        $wecom = Open-Workbench $wecom
         Log '已确认进入工作台，打开校园场馆/会议预约系统'
         Open-CampusApp $wecom
         $entryDeadline = (Get-Date).AddSeconds(6)
