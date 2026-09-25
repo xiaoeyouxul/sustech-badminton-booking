@@ -367,13 +367,15 @@ function Find-Venue($Browser) {
 
 function Scroll-Notice($Browser) {
     $handle = [IntPtr]$Browser.Current.NativeWindowHandle
+    if ([NativeUi]::GetForegroundWindow() -ne $handle) { throw '滚动须知前预约窗口失去前台焦点' }
     $r = New-Object NativeUi+NativeRect
     if (-not [NativeUi]::GetWindowRect($handle, [ref]$r)) { throw '无法读取预约窗口位置' }
     $x = [int]($r.Left + ($r.Right - $r.Left) * 0.5)
     $y = [int]($r.Top + ($r.Bottom - $r.Top) * 0.55)
     [void][NativeUi]::SetCursorPos($x, $y)
-    Start-Sleep -Milliseconds 80
+    Start-Sleep -Milliseconds 20
     for ($step = 0; $step -lt 3; $step++) {
+        if ([NativeUi]::GetForegroundWindow() -ne $handle) { throw '滚动须知时预约窗口失去前台焦点' }
         [NativeUi]::mouse_event(0x0800, 0, 0, -1200, [UIntPtr]::Zero)
         Start-Sleep -Milliseconds 20
     }
@@ -386,24 +388,32 @@ function Test-NoticeVisible($Browser) {
         $shade.R -lt 150 -and $shade.G -lt 150 -and $shade.B -lt 150)
 }
 
-function Accept-Notice($Browser) {
-    Focus-Maximize $Browser
+function Test-NoticeButtonEnabled($Browser) {
+    $button = Get-WindowPixel $Browser 0.46 0.784
+    return ($button.R -lt 70 -and $button.G -gt 140 -and $button.G -lt 230 -and $button.B -lt 150)
+}
+
+function Accept-Notice($Browser, [switch]$WindowReady) {
+    # Open-Booking already waits for stable maximized bounds before returning.
+    if (-not $WindowReady) { Focus-Maximize $Browser }
+    if ([NativeUi]::GetForegroundWindow() -ne [IntPtr]$Browser.Current.NativeWindowHandle) {
+        throw '检查须知前预约窗口失去前台焦点'
+    }
     Log '检查场地预约须知（依据你提供的最大化窗口截图）'
     $until = (Get-Date).AddSeconds(6)
     while (-not (Test-NoticeVisible $Browser)) {
         if ((Get-Date) -ge $until) {
             throw '未能确认场地预约须知弹窗，请检查预约窗口是否最大化及浏览器缩放'
         }
-        Start-Sleep -Milliseconds 250
+        Start-Sleep -Milliseconds 40
     }
     for ($i = 0; $i -le 4; $i++) {
-        $button = Get-WindowPixel $Browser 0.46 0.784
-        if ($button.R -lt 70 -and $button.G -gt 140 -and $button.G -lt 230 -and $button.B -lt 150) {
+        if (Test-NoticeButtonEnabled $Browser) {
             Log '已滚动到底部，点击「同意本条款」'
-            Click-WindowRatio $Browser 0.50 0.795
+            Click-WindowRatio $Browser 0.50 0.795 -SettleMilliseconds 20
             $until = (Get-Date).AddSeconds(3)
             do {
-                Start-Sleep -Milliseconds 250
+                Start-Sleep -Milliseconds 40
                 if (-not (Test-NoticeVisible $Browser)) {
                     Log '须知弹窗已关闭'
                     return
@@ -414,7 +424,11 @@ function Accept-Notice($Browser) {
         if ($i -eq 4) { break }
         Log ("在须知内容区向下滚动（第 {0} 次）" -f ($i + 1))
         Scroll-Notice $Browser
-        Start-Sleep -Milliseconds 300
+        $renderDeadline = (Get-Date).AddMilliseconds(300)
+        while (-not (Test-NoticeButtonEnabled $Browser)) {
+            if ((Get-Date) -ge $renderDeadline) { break }
+            Start-Sleep -Milliseconds 40
+        }
     }
     throw '滚动后未看到可点击的「同意本条款」，请手动检查页面或重新校准窗口缩放'
 }
@@ -772,7 +786,7 @@ try {
     Register-BookingProcess
     $browser = Open-Booking
     Log '已检测到预约弹窗并放大'
-    Accept-Notice $browser
+    Accept-Notice $browser -WindowReady
     Open-Venue $browser -FreshList
     $release = [datetime]::ParseExact([string]$config.release_time, 'HH:mm:ss', $null)
     if ($config.wait_for_release) {
