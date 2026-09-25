@@ -32,6 +32,27 @@ public static class VisualProbe {
             return result;
         }
     }
+    public static bool DaySelected(IntPtr h, double x) {
+        Rectangle r=Bounds(h);
+        int w=Math.Max(10,(int)(r.Width*0.018)), height=Math.Max(8,(int)(r.Height*0.022));
+        using(Bitmap b=new Bitmap(w,height)) {
+            using(Graphics g=Graphics.FromImage(b))
+                g.CopyFromScreen(r.Left+(int)(x*r.Width)-w/2,r.Top+(int)(r.Height*0.377),0,0,b.Size);
+            return HasSelectedUnderline(b);
+        }
+    }
+    public static bool HasSelectedUnderline(Bitmap b) {
+        for(int y=0;y<b.Height;y++) {
+            int run=0;
+            for(int x=0;x<b.Width;x++) {
+                Color c=b.GetPixel(x,y);
+                bool teal=c.G>130 && c.B>120 && c.G-c.R>35 && c.B-c.R>25 && Math.Abs(c.G-c.B)<45;
+                run=teal ? run+1 : 0;
+                if(run>=Math.Max(8,b.Width/2)) return true;
+            }
+        }
+        return false;
+    }
     public static bool Match(IntPtr h, string path, int x, int y) {
         Rectangle r=Bounds(h);
         Bitmap template;

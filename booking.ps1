@@ -567,17 +567,8 @@ function Open-Court($Browser, [int]$Court) {
 }
 
 function Test-DaySelected($Browser, [double]$XRatio) {
-    foreach ($dx in @(-0.01, 0, 0.01)) {
-        for ($step = 0; $step -le 45; $step++) {
-            $y = 0.36 + $step * 0.001
-            $pixel = Get-WindowPixel $Browser ($XRatio + $dx) $y
-            if ($pixel.R -lt 100 -and $pixel.G -gt 140 -and $pixel.G -lt 220 -and
-                $pixel.B -gt 130 -and $pixel.B -lt 220) { return $true }
-        }
-    }
-    return $false
+    return [VisualProbe]::DaySelected([IntPtr]$Browser.Current.NativeWindowHandle, $XRatio)
 }
-
 function Select-Day($Browser, [datetime]$Day, [timespan]$ReleaseTime) {
     $now = Get-Date
     $offset = [int]($Day.Date - $now.Date).TotalDays
