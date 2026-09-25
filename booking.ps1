@@ -316,6 +316,10 @@ function Open-CampusApp($Wecom) {
 }
 
 function Test-WorkbenchSelected($Wecom) {
+    # Prefer the visible Workbench title exposed by UI Automation. Pixel color
+    # varies with WeCom theme, DPI scaling and the selected icon background.
+    $title = Find-Text $Wecom '工作台' -Exact
+    if ($null -ne $title) { return $true }
     $points = foreach ($x in @(0.012, 0.016, 0.020)) {
         foreach ($y in @(0.510, 0.514, 0.518, 0.522, 0.526)) { $x; $y }
     }
