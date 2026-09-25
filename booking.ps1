@@ -16,6 +16,7 @@ public static class NativeUi {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extraInfo);
@@ -119,6 +120,7 @@ function Register-BookingProcess {
 
 function Click-WindowRatio($Window, [double]$XRatio, [double]$YRatio) {
     $handle = [IntPtr]$Window.Current.NativeWindowHandle
+    if ([NativeUi]::GetForegroundWindow() -ne $handle) { throw '点击前目标窗口失去前台焦点，已停止' }
     $rect = New-Object NativeUi+NativeRect
     if ($handle -eq [IntPtr]::Zero -or -not [NativeUi]::GetWindowRect($handle, [ref]$rect)) {
         throw '无法取得窗口位置'
@@ -184,6 +186,7 @@ function Find-BookingWindow {
 function Focus-Maximize($Window) {
     $h = [IntPtr]$Window.Current.NativeWindowHandle
     if ($h -eq [IntPtr]::Zero) { throw '找到了预约页，但无法取得窗口句柄' }
+    if ([NativeUi]::IsIconic($h)) { [void][NativeUi]::ShowWindow($h, 9) }
     [void][NativeUi]::ShowWindow($h, 3)
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         [void][NativeUi]::SetForegroundWindow($h)
@@ -191,13 +194,24 @@ function Focus-Maximize($Window) {
         if ([NativeUi]::GetForegroundWindow() -eq $h) { break }
     }
     if ([NativeUi]::GetForegroundWindow() -ne $h) { throw '无法将目标窗口置于前台，请先关闭遮挡窗口再重试' }
-    $rect = New-Object NativeUi+NativeRect
     $workArea = [System.Windows.Forms.Screen]::FromHandle($h).WorkingArea
-    if (-not [NativeUi]::GetWindowRect($h, [ref]$rect) -or
-        ($rect.Right - $rect.Left) -lt $workArea.Width * 0.9 -or
-        ($rect.Bottom - $rect.Top) -lt $workArea.Height * 0.9) {
-        throw '窗口未成功最大化，请先放大窗口再重试'
-    }
+    $previous = ''
+    $stable = 0
+    $deadline = (Get-Date).AddSeconds(3)
+    do {
+        $rect = New-Object NativeUi+NativeRect
+        if ([NativeUi]::GetWindowRect($h, [ref]$rect) -and
+            ($rect.Right - $rect.Left) -ge $workArea.Width * 0.9 -and
+            ($rect.Bottom - $rect.Top) -ge $workArea.Height * 0.9 -and
+            [NativeUi]::GetForegroundWindow() -eq $h) {
+            $bounds = '{0},{1},{2},{3}' -f $rect.Left,$rect.Top,$rect.Right,$rect.Bottom
+            if ($bounds -eq $previous) { $stable++ } else { $stable = 0 }
+            $previous = $bounds
+            if ($stable -ge 2) { return }
+        } else { $stable = 0; $previous = '' }
+        Start-Sleep -Milliseconds 100
+    } while ((Get-Date) -lt $deadline)
+    throw '窗口尚未稳定最大化或前台焦点已丢失，请保持目标窗口可见后重试'
 }
 
 function Scroll-In($Window, [int]$Steps = 5, [switch]$Modal) {
@@ -272,26 +286,18 @@ function Open-Booking {
     Log '已放大企业微信，开始打开工作台'
     try {
         if (-not (Test-WorkbenchSelected $wecom)) {
-            if (-not (Click-Text $wecom '工作台' -Exact)) {
-                Log '未读到工作台按钮，按最大化窗口的左侧位置点击'
-                Click-WindowRatio $wecom 0.016 0.529
-            }
-            Start-Sleep -Milliseconds 500
-            if (-not (Test-WorkbenchSelected $wecom)) {
-                Log '尚未进入工作台，再尝试点击一次'
-                Focus-Maximize $wecom
-                Click-WindowRatio $wecom 0.016 0.529
-                Start-Sleep -Milliseconds 500
-                if (-not (Test-WorkbenchSelected $wecom)) {
-                    throw '点击后仍未进入工作台'
-                }
-            }
+            Log '按固定位置点击工作台'
+            Click-WindowRatio $wecom 0.016 0.529
+            $deadline = (Get-Date).AddSeconds(3)
+            do {
+                Start-Sleep -Milliseconds 100
+                if (Test-WorkbenchSelected $wecom) { break }
+            } while ((Get-Date) -lt $deadline)
+            if (-not (Test-WorkbenchSelected $wecom)) { throw '点击工作台后未确认页面切换，请手动进入；不会重复点击切回消息页' }
         }
         Log '已确认进入工作台，打开校园场馆/会议预约系统'
-        $appCard = Wait-Text $wecom '校园场馆/会议预约系统' 1
-        if ($null -eq $appCard -or -not (Click-Element $appCard)) {
-            Click-WindowRatio $wecom 0.938 0.294
-        }
+        Start-Sleep -Milliseconds 300
+        Click-WindowRatio $wecom 0.938 0.294
         Start-Sleep -Milliseconds 1500
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             Log ("尝试点击底部场地预约（第 {0} 次）" -f $attempt)
