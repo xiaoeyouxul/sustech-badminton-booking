@@ -118,7 +118,7 @@ function Register-BookingProcess {
         Set-Content -LiteralPath $pidFile -Encoding ASCII
 }
 
-function Click-WindowRatio($Window, [double]$XRatio, [double]$YRatio) {
+function Click-WindowRatio($Window, [double]$XRatio, [double]$YRatio, [ValidateRange(0, 1000)][int]$SettleMilliseconds = 80) {
     $handle = [IntPtr]$Window.Current.NativeWindowHandle
     if ([NativeUi]::GetForegroundWindow() -ne $handle) { throw '点击前目标窗口失去前台焦点，已停止' }
     $rect = New-Object NativeUi+NativeRect
@@ -131,7 +131,8 @@ function Click-WindowRatio($Window, [double]$XRatio, [double]$YRatio) {
     $x = [int]($rect.Left + $width * $XRatio)
     $y = [int]($rect.Top + $height * $YRatio)
     [void][NativeUi]::SetCursorPos($x, $y)
-    Start-Sleep -Milliseconds 80
+    Start-Sleep -Milliseconds $SettleMilliseconds
+    if ([NativeUi]::GetForegroundWindow() -ne $handle) { throw '点击前目标窗口失去前台焦点，已停止' }
     [NativeUi]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [NativeUi]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
 }
@@ -296,8 +297,7 @@ function Open-Booking {
             if (-not (Test-WorkbenchSelected $wecom)) { throw '点击工作台后未确认页面切换，请手动进入；不会重复点击切回消息页' }
         }
         Log '已确认进入工作台，打开校园场馆/会议预约系统'
-        Start-Sleep -Milliseconds 300
-        Click-WindowRatio $wecom 0.938 0.294
+        Click-WindowRatio $wecom 0.938 0.294 -SettleMilliseconds 20
         Start-Sleep -Milliseconds 200
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             # A slow popup may arrive just after the preceding wait ended.
