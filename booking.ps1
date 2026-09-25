@@ -578,15 +578,13 @@ function Select-Day($Browser, [datetime]$Day, [timespan]$ReleaseTime) {
         Log '球场页默认显示今天，沿用当前日期'
         return
     }
-    $until = (Get-Date).AddSeconds(6)
-    do {
-        if (Test-DaySelected $Browser $x) { return }
-        Start-Sleep -Milliseconds 250
-    } while ((Get-Date) -lt $until)
-    Click-WindowRatio $Browser $x 0.367
+    # For 明天/后天, do not trust stale pixels from the previous page.
+    # Always click the calculated tab first, then verify the selected underline.
+    Start-Sleep -Milliseconds 40
+    Click-WindowRatio $Browser $x 0.367 -SettleMilliseconds 20
     $until = (Get-Date).AddSeconds(3)
     do {
-        Start-Sleep -Milliseconds 150
+        Start-Sleep -Milliseconds 100
         if (Test-DaySelected $Browser $x) { return }
     } while ((Get-Date) -lt $until)
     $handle = [IntPtr]$Browser.Current.NativeWindowHandle
