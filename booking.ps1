@@ -271,7 +271,47 @@ function Wait-BookingWindow([int]$TimeoutSeconds, [int]$ProgressSeconds = 0) {
     return $null
 }
 
+function Test-CampusTileVisible($Wecom) {
+    # Sample the orange header and teal body of the calendar icon, not text.
+    if ([NativeUi]::GetForegroundWindow() -ne [IntPtr]$Wecom.Current.NativeWindowHandle) {
+        throw '检查校园场馆入口时企业微信失去前台焦点'
+    }
+    $orange = 0; $teal = 0
+    foreach ($x in @(0.892, 0.896, 0.900, 0.904, 0.908)) {
+        foreach ($y in @(0.284, 0.288, 0.292, 0.296, 0.300, 0.304)) {
+            $p = Get-WindowPixel $Wecom $x $y
+            if ($p.R -gt 170 -and $p.G -gt 65 -and $p.G -lt 200 -and $p.B -lt 110) { $orange++ }
+            if ($p.R -lt 125 -and $p.G -gt 120 -and $p.B -gt 105 -and $p.G -gt $p.R + 35) { $teal++ }
+        }
+    }
+    return ($orange -ge 2 -and $teal -ge 2)
+}
+
+function Open-CampusApp($Wecom) {
+    $deadline = (Get-Date).AddSeconds(6)
+    $nextClick = [datetime]::MinValue
+    $clicks = 0; $absent = 0
+    do {
+        if (Test-CampusTileVisible $Wecom) {
+            $absent = 0
+            if ($clicks -lt 3 -and (Get-Date) -ge $nextClick) {
+                $clicks++
+                Log ("校园场馆图标已显示，坐标点击入口（第 {0} 次）" -f $clicks)
+                Click-WindowRatio $Wecom 0.938 0.294 -SettleMilliseconds 20
+                $nextClick = (Get-Date).AddMilliseconds(700)
+            }
+        } elseif ($clicks -gt 0) {
+            $absent++
+            # Two consecutive samples confirm that the workbench tile disappeared.
+            if ($absent -ge 2) { return }
+        }
+        Start-Sleep -Milliseconds 80
+    } while ((Get-Date) -lt $deadline)
+    throw '校园场馆入口未显示或点击后仍停留工作台，停止点击底部场地预约；请手动打开校园场馆入口'
+}
+
 function Test-WorkbenchSelected($Wecom) {
+    if (Test-CampusTileVisible $Wecom) { return $true }
     $sidebar = Get-WindowPixel $Wecom 0.01 0.52
     $tab = Get-WindowPixel $Wecom 0.10 0.034
     return (($sidebar.R -lt 210 -and $sidebar.G -lt 225 -and $sidebar.B -gt 230) -or
@@ -297,7 +337,7 @@ function Open-Booking {
             if (-not (Test-WorkbenchSelected $wecom)) { throw '点击工作台后未确认页面切换，请手动进入；不会重复点击切回消息页' }
         }
         Log '已确认进入工作台，打开校园场馆/会议预约系统'
-        Click-WindowRatio $wecom 0.938 0.294 -SettleMilliseconds 20
+        Open-CampusApp $wecom
         Start-Sleep -Milliseconds 200
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             # A slow popup may arrive just after the preceding wait ended.
