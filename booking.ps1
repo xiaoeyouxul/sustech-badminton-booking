@@ -376,10 +376,13 @@ function Accept-Notice($Browser) {
     throw '滚动后未看到可点击的「同意本条款」，请手动检查页面或重新校准窗口缩放'
 }
 
-function Open-Venue($Browser) {
+function Open-Venue($Browser, [switch]$FreshList) {
     Log '打开场馆列表中的润杨羽毛球馆'
-    Focus-Maximize $Browser
-    Scroll-To-Top $Browser
+    # Accept-Notice has already maximized the window; the fresh list is at its top.
+    if (-not $FreshList) {
+        Focus-Maximize $Browser
+        Scroll-To-Top $Browser
+    }
     $before = Get-WindowPixel $Browser 0.05 0.25
     # The fifth venue card is partly visible above the bottom navigation on the maximized page.
     foreach ($attempt in 1..2) {
@@ -393,7 +396,7 @@ function Open-Venue($Browser) {
         Click-WindowRatio $Browser 0.16 $y
         $until = (Get-Date).AddSeconds(2)
         do {
-            Start-Sleep -Milliseconds 250
+            Start-Sleep -Milliseconds 80
             $after = Get-WindowPixel $Browser 0.05 0.25
             $change = [Math]::Abs($after.R - $before.R) +
                 [Math]::Abs($after.G - $before.G) +
@@ -727,7 +730,7 @@ try {
     $browser = Open-Booking
     Log '已检测到预约弹窗并放大'
     Accept-Notice $browser
-    Open-Venue $browser
+    Open-Venue $browser -FreshList
     $release = [datetime]::ParseExact([string]$config.release_time, 'HH:mm:ss', $null)
     if ($config.wait_for_release) {
         $deadline = (Get-Date).Date.Add($release.TimeOfDay)
