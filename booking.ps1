@@ -330,9 +330,9 @@ function Scroll-Notice($Browser) {
     $y = [int]($r.Top + ($r.Bottom - $r.Top) * 0.55)
     [void][NativeUi]::SetCursorPos($x, $y)
     Start-Sleep -Milliseconds 80
-    for ($step = 0; $step -lt 30; $step++) {
-        [NativeUi]::mouse_event(0x0800, 0, 0, -120, [UIntPtr]::Zero)
-        Start-Sleep -Milliseconds 25
+    for ($step = 0; $step -lt 3; $step++) {
+        [NativeUi]::mouse_event(0x0800, 0, 0, -1200, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 20
     }
 }
 
@@ -593,9 +593,20 @@ function Fill-Near($Browser, [string]$Label, [string]$Value) {
 }
 
 function Try-Return($Browser) {
+    $points = @(@(0.05,0.25), @(0.50,0.55), @(0.85,0.78))
+    $before = @($points | ForEach-Object { Get-WindowPixel $Browser $_[0] $_[1] })
     Click-WindowRatio $Browser 0.028 0.095
-    Start-Sleep -Milliseconds 350
-    return $true
+    $deadline = (Get-Date).AddSeconds(2)
+    do {
+        Start-Sleep -Milliseconds 150
+        for ($i = 0; $i -lt $points.Count; $i++) {
+            $after = Get-WindowPixel $Browser $points[$i][0] $points[$i][1]
+            $delta = [Math]::Abs($after.R-$before[$i].R) + [Math]::Abs($after.G-$before[$i].G) + [Math]::Abs($after.B-$before[$i].B)
+            if ($delta -gt 75) { Log '返回后页面已变化，继续下一个备选'; return $true }
+        }
+    } while ((Get-Date) -lt $deadline)
+    Log '返回后页面未变化，停止以避免连续回退'
+    return $false
 }
 
 function Read-FocusedText {
@@ -743,7 +754,6 @@ try {
     }
     $attempts = 0
     $resets = 0
-    $backs = 0
     foreach ($pair in $pairs) {
         if ($attempts -ge [int]$config.max_attempts) { break }
         $attempts++
@@ -758,20 +768,10 @@ try {
         if (-not (Select-Slots $browser $pair.Range)) {
             Log '所选时段已满或无法点击'
             if (-not (Try-Return $browser)) {
-                $resets++
-                if ($resets -gt [int]$config.max_navigation_resets -or -not (Reopen-Venue $browser)) { throw '回退失败，已停止' }
-                $backs = 0
-            } else {
-                $backs++
-                if ($backs -ge 2) {
-                    $resets++
-                    if ($resets -gt [int]$config.max_navigation_resets -or -not (Reopen-Venue $browser)) { throw '回退过多，重新进入球馆失败' }
-                    $backs = 0
-                }
+                throw '无法确认从时段页返回球场列表，请检查页面；本次未提交'
             }
             continue
         }
-        $backs = 0
         Fill-VisibleField $browser '使用人数' ([string]$config.people)
         Fill-VisibleField $browser '手机号码' ([string]$config.phone)
         if ($config.dry_run) { Log '试运行已填写表单，未提交'; exit 0 }
