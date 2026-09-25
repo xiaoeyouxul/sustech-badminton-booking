@@ -316,11 +316,38 @@ function Open-CampusApp($Wecom) {
 }
 
 function Test-WorkbenchSelected($Wecom) {
-    if (Test-CampusTileVisible $Wecom) { return $true }
-    $sidebar = Get-WindowPixel $Wecom 0.01 0.52
-    $tab = Get-WindowPixel $Wecom 0.10 0.034
-    return (($sidebar.R -lt 210 -and $sidebar.G -lt 225 -and $sidebar.B -gt 230) -or
-        ($tab.R -gt 240 -and $tab.G -gt 240 -and $tab.B -gt 240))
+    $points = foreach ($x in @(0.012, 0.016, 0.020)) {
+        foreach ($y in @(0.510, 0.514, 0.518, 0.522, 0.526)) { $x; $y }
+    }
+    $blue = 0
+    foreach ($argb in [VisualProbe]::Sample([IntPtr]$Wecom.Current.NativeWindowHandle, [double[]]$points)) {
+        $p = [System.Drawing.Color]::FromArgb($argb)
+        if ($p.R -lt 100 -and $p.G -gt 85 -and $p.G -lt 190 -and $p.B -gt 200) { $blue++ }
+    }
+    return ($blue -ge 2)
+}
+
+function Wait-WeComTransition($Wecom) {
+    # A tab transition can briefly replace the foreground native window.
+    # Only adopt a visible full-size WXWork window; never refocus another app.
+    $until = (Get-Date).AddMilliseconds(1000)
+    do {
+        $foreground = [NativeUi]::GetForegroundWindow()
+        if ($foreground -eq [IntPtr]$Wecom.Current.NativeWindowHandle) { return $Wecom }
+        if ($foreground -ne [IntPtr]::Zero) {
+            $candidate = [System.Windows.Automation.AutomationElement]::FromHandle($foreground)
+            if ($null -ne $candidate -and (Proc-Name $candidate) -eq 'WXWork') {
+                $r = $candidate.Current.BoundingRectangle
+                if (-not $candidate.Current.IsOffscreen -and $r.Width -ge 800 -and $r.Height -ge 600) {
+                    Focus-Maximize $candidate
+                    Log '工作台切换后已接续企业微信前台窗口'
+                    return $candidate
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 40
+    } while ((Get-Date) -lt $until)
+    throw '工作台切换后企业微信未恢复前台，请保持企业微信可见，不要切换到终端'
 }
 
 function Open-Booking {
@@ -337,6 +364,7 @@ function Open-Booking {
             $deadline = (Get-Date).AddSeconds(3)
             do {
                 Start-Sleep -Milliseconds 40
+                $wecom = Wait-WeComTransition $wecom
                 if (Test-WorkbenchSelected $wecom) { break }
             } while ((Get-Date) -lt $deadline)
             if (-not (Test-WorkbenchSelected $wecom)) { throw '点击工作台后未确认页面切换，请手动进入；不会重复点击切回消息页' }
