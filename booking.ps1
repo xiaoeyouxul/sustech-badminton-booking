@@ -26,6 +26,7 @@ public static class NativeUi {
 }
 '@
 [void][NativeUi]::SetProcessDPIAware()
+Add-Type -Path (Join-Path $PSScriptRoot 'visual-probe.cs') -ReferencedAssemblies System.Drawing,System.Windows.Forms
 
 function Log([string]$Message) {
     $line = '[{0:HH:mm:ss.fff}] {1}' -f (Get-Date), $Message
@@ -191,7 +192,10 @@ function Focus-Maximize($Window) {
     [void][NativeUi]::ShowWindow($h, 3)
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         [void][NativeUi]::SetForegroundWindow($h)
-        Start-Sleep -Milliseconds 250
+        $focusDeadline = (Get-Date).AddMilliseconds(250)
+        while ([NativeUi]::GetForegroundWindow() -ne $h -and (Get-Date) -lt $focusDeadline) {
+            Start-Sleep -Milliseconds 40
+        }
         if ([NativeUi]::GetForegroundWindow() -eq $h) { break }
     }
     if ([NativeUi]::GetForegroundWindow() -ne $h) { throw '无法将目标窗口置于前台，请先关闭遮挡窗口再重试' }
@@ -210,7 +214,7 @@ function Focus-Maximize($Window) {
             $previous = $bounds
             if ($stable -ge 2) { return }
         } else { $stable = 0; $previous = '' }
-        Start-Sleep -Milliseconds 100
+        Start-Sleep -Milliseconds 40
     } while ((Get-Date) -lt $deadline)
     throw '窗口尚未稳定最大化或前台焦点已丢失，请保持目标窗口可见后重试'
 }
@@ -266,7 +270,7 @@ function Wait-BookingWindow([int]$TimeoutSeconds, [int]$ProgressSeconds = 0) {
             Log '仍在等待独立的场地预约弹窗'
             $lastProgress = Get-Date
         }
-        Start-Sleep -Milliseconds 100
+        Start-Sleep -Milliseconds 40
     } while ((Get-Date) -lt $until)
     return $null
 }
@@ -277,12 +281,13 @@ function Test-CampusTileVisible($Wecom) {
         throw '检查校园场馆入口时企业微信失去前台焦点'
     }
     $orange = 0; $teal = 0
-    foreach ($x in @(0.892, 0.896, 0.900, 0.904, 0.908)) {
-        foreach ($y in @(0.284, 0.288, 0.292, 0.296, 0.300, 0.304)) {
-            $p = Get-WindowPixel $Wecom $x $y
-            if ($p.R -gt 170 -and $p.G -gt 65 -and $p.G -lt 200 -and $p.B -lt 110) { $orange++ }
-            if ($p.R -lt 125 -and $p.G -gt 120 -and $p.B -gt 105 -and $p.G -gt $p.R + 35) { $teal++ }
-        }
+    $points = foreach ($x in @(0.892, 0.896, 0.900, 0.904, 0.908)) {
+        foreach ($y in @(0.284, 0.288, 0.292, 0.296, 0.300, 0.304)) { $x; $y }
+    }
+    foreach ($argb in [VisualProbe]::Sample([IntPtr]$Wecom.Current.NativeWindowHandle, [double[]]$points)) {
+        $p = [System.Drawing.Color]::FromArgb($argb)
+        if ($p.R -gt 170 -and $p.G -gt 65 -and $p.G -lt 200 -and $p.B -lt 110) { $orange++ }
+        if ($p.R -lt 125 -and $p.G -gt 120 -and $p.B -gt 105 -and $p.G -gt $p.R + 35) { $teal++ }
     }
     return ($orange -ge 2 -and $teal -ge 2)
 }
@@ -305,7 +310,7 @@ function Open-CampusApp($Wecom) {
             # Two consecutive samples confirm that the workbench tile disappeared.
             if ($absent -ge 2) { return }
         }
-        Start-Sleep -Milliseconds 80
+        Start-Sleep -Milliseconds 40
     } while ((Get-Date) -lt $deadline)
     throw '校园场馆入口未显示或点击后仍停留工作台，停止点击底部场地预约；请手动打开校园场馆入口'
 }
@@ -328,23 +333,27 @@ function Open-Booking {
     try {
         if (-not (Test-WorkbenchSelected $wecom)) {
             Log '按固定位置点击工作台'
-            Click-WindowRatio $wecom 0.016 0.529
+            Click-WindowRatio $wecom 0.016 0.529 -SettleMilliseconds 20
             $deadline = (Get-Date).AddSeconds(3)
             do {
-                Start-Sleep -Milliseconds 100
+                Start-Sleep -Milliseconds 40
                 if (Test-WorkbenchSelected $wecom) { break }
             } while ((Get-Date) -lt $deadline)
             if (-not (Test-WorkbenchSelected $wecom)) { throw '点击工作台后未确认页面切换，请手动进入；不会重复点击切回消息页' }
         }
         Log '已确认进入工作台，打开校园场馆/会议预约系统'
         Open-CampusApp $wecom
-        Start-Sleep -Milliseconds 200
+        $entryDeadline = (Get-Date).AddSeconds(6)
+        while (-not (Test-VisualPatch $wecom 'booking-entry' 635 1485)) {
+            if ((Get-Date) -ge $entryDeadline) { throw '未确认底部场地预约入口显示，请手动打开' }
+            Start-Sleep -Milliseconds 40
+        }
         for ($attempt = 1; $attempt -le 5; $attempt++) {
             # A slow popup may arrive just after the preceding wait ended.
             $browser = Find-BookingWindow
             if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
             Log ("尝试点击底部场地预约（第 {0} 次）" -f $attempt)
-            Click-WindowRatio $wecom 0.267 0.982
+            Click-WindowRatio $wecom 0.267 0.982 -SettleMilliseconds 20
             $browser = Wait-BookingWindow 3
             if ($null -ne $browser) { Focus-Maximize $browser; return $browser }
         }
@@ -376,6 +385,7 @@ function Scroll-Notice($Browser) {
     Start-Sleep -Milliseconds 20
     for ($step = 0; $step -lt 3; $step++) {
         if ([NativeUi]::GetForegroundWindow() -ne $handle) { throw '滚动须知时预约窗口失去前台焦点' }
+        if (-not (Test-NoticeVisible $Browser)) { return }
         [NativeUi]::mouse_event(0x0800, 0, 0, -1200, [UIntPtr]::Zero)
         Start-Sleep -Milliseconds 20
     }
@@ -408,6 +418,10 @@ function Accept-Notice($Browser, [switch]$WindowReady) {
         Start-Sleep -Milliseconds 40
     }
     for ($i = 0; $i -le 4; $i++) {
+        if (-not (Test-NoticeVisible $Browser)) {
+            Log '须知已消失，停止滚轮并转入场馆卡片核对'
+            return
+        }
         if (Test-NoticeButtonEnabled $Browser) {
             Log '已滚动到底部，点击「同意本条款」'
             Click-WindowRatio $Browser 0.50 0.795 -SettleMilliseconds 20
@@ -433,40 +447,47 @@ function Accept-Notice($Browser, [switch]$WindowReady) {
     throw '滚动后未看到可点击的「同意本条款」，请手动检查页面或重新校准窗口缩放'
 }
 
+function Test-VisualPatch($Window, [string]$Name, [int]$X, [int]$Y) {
+    return [VisualProbe]::Match([IntPtr]$Window.Current.NativeWindowHandle,
+        (Join-Path $PSScriptRoot ('assets/' + $Name + '.png')), $X, $Y)
+}
+
+function Test-VenueCardReady($Browser) {
+    if (Test-NoticeVisible $Browser) { return $false }
+    return (Test-VisualPatch $Browser 'venue-card' 63 1403)
+}
+
+function Test-BadmintonCourtList($Browser) {
+    # Two badminton thumbnails at their court-list positions, not a single changing pixel.
+    return ((Test-VisualPatch $Browser 'court-first' 63 241) -and
+        (Test-VisualPatch $Browser 'court-second' 63 452))
+}
+
 function Open-Venue($Browser, [switch]$FreshList) {
-    Log '打开场馆列表中的润杨羽毛球馆'
-    # Accept-Notice has already maximized the window; the fresh list is at its top.
+    Log '等待润杨羽毛球馆卡片显示，核对后点击'
     if (-not $FreshList) {
         Focus-Maximize $Browser
         Scroll-To-Top $Browser
     }
-    $before = Get-WindowPixel $Browser 0.05 0.25
-    # The fifth venue card is partly visible above the bottom navigation on the maximized page.
-    foreach ($attempt in 1..2) {
-        if ($attempt -eq 2) {
-            Log '场馆页面未变化，向下滚动后重试一次'
-            Scroll-In $Browser 2
-            Start-Sleep -Milliseconds 250
-            $before = Get-WindowPixel $Browser 0.05 0.25
-        }
-        $y = if ($attempt -eq 1) { 0.925 } else { 0.82 }
-        Click-WindowRatio $Browser 0.16 $y
-        $until = (Get-Date).AddSeconds(2)
-        do {
-            Start-Sleep -Milliseconds 80
-            $after = Get-WindowPixel $Browser 0.05 0.25
-            $change = [Math]::Abs($after.R - $before.R) +
-                [Math]::Abs($after.G - $before.G) +
-                [Math]::Abs($after.B - $before.B)
-            if ($change -gt 75) {
-                Log '球场列表已打开'
-                return
+    $until = (Get-Date).AddSeconds(6)
+    $clicks = 0; $nextClick = [datetime]::MinValue; $confirmed = 0
+    do {
+        if (Test-BadmintonCourtList $Browser) {
+            $confirmed++
+            if ($confirmed -ge 2) { Log '已核对羽毛球馆球场列表'; return }
+        } else {
+            $confirmed = 0
+            if ($clicks -lt 2 -and (Get-Date) -ge $nextClick -and (Test-VenueCardReady $Browser)) {
+                $clicks++
+                Click-WindowRatio $Browser 0.16 0.935 -SettleMilliseconds 20
+                Log ('已点击润杨羽毛球馆卡片，第 {0} 次' -f $clicks)
+                $nextClick = (Get-Date).AddMilliseconds(700)
             }
-        } while ((Get-Date) -lt $until)
-    }
-    throw '点击润杨羽毛球馆后页面未变化；已停止，请检查浏览器缩放和场馆列表位置'
+        }
+        Start-Sleep -Milliseconds 40
+    } while ((Get-Date) -lt $until)
+    throw '未确认进入羽毛球馆球场列表，已停止；不会向下翻页或点击其他场馆，请检查当前页面及缩放'
 }
-
 function Open-Court($Browser, [int]$Court) {
     # Court cards are ordered as shown in the user's maximized desktop screenshots.
     $topPositions = @{ 5 = 0.20; 3 = 0.34; 8 = 0.47; 2 = 0.61; 1 = 0.75; 7 = 0.89 }
